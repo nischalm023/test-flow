@@ -1,7 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  serverExternalPackages: [
+    "langchain",
+    "@langchain/core",
+    "@langchain/anthropic",
+    "@langchain/openrouter",
+    "@langchain/langgraph",
+  ],
 };
 
 export default nextConfig;

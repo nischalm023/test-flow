@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { GitFork, Lock, Scan, Sparkles, Star } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth-store';
 import { Button } from '@/components/ui/button';
@@ -28,10 +29,16 @@ type GithubRepoListProps = {
   scanningRepoId?: number | null;
 };
 
-export function GithubRepoList({ onScanRepo, scanningRepoId }: GithubRepoListProps) {
+export function GithubRepoList({ scanningRepoId }: GithubRepoListProps) {
+  const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+
+  const handleScan = (repo: GithubRepo) => {
+    const fullName = repo.full_name || repo.name;
+    router.push(`/scan?repo=${encodeURIComponent(fullName)}`);
+  };
 
   useEffect(() => {
     if (!user?.githubLogin) return;
@@ -152,7 +159,7 @@ export function GithubRepoList({ onScanRepo, scanningRepoId }: GithubRepoListPro
                   size="sm"
                   className="flex-1"
                   disabled={scanningRepoId === repo.id}
-                  onClick={() => onScanRepo?.(repo)}
+                  onClick={() => handleScan(repo)}
                 >
                   <Scan className="w-4 h-4" />
                   {scanningRepoId === repo.id ? 'Scanning…' : 'Scan'}
