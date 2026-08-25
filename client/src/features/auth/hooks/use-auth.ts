@@ -51,6 +51,7 @@ export function useLogout() {
   const queryClient = useQueryClient();
 
   const logout = () => {
+    void fetch('/api/auth/github/logout', { method: 'POST' });
     clearAuth();
     queryClient.clear();
     toast.success('Logged out successfully');
