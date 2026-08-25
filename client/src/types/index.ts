@@ -26,6 +26,7 @@ export interface User {
   email: string;
   name: string;
   role: 'USER' | 'ORGANIZER' | 'ADMIN';
+  githubLogin?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -10,5 +10,9 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@types/node": "^26.2.0"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.102.3",
+    "octokit": "^5.0.5"
   }
 }

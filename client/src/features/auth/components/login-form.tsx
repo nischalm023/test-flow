@@ -1,8 +1,10 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -15,9 +17,18 @@ import {
 } from '@/components/ui/form';
 import { useLogin } from '../hooks/use-auth';
 import { loginSchema, type LoginFormData } from '../types';
+import { GithubSignInButton } from './github-sign-in-button';
 
 export function LoginForm() {
   const { mutate: login, isPending } = useLogin();
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('error') === 'github') {
+      toast.error('GitHub login failed', {
+        description: 'Please try again, or sign in with email.',
+      });
+    }
+  }, []);
 
   const form = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
@@ -75,6 +86,19 @@ export function LoginForm() {
         <Button type="submit" className="w-full" disabled={isPending}>
           {isPending ? 'Signing in...' : 'Sign In'}
         </Button>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t border-zinc-200 dark:border-zinc-800" />
+          </div>
+          <div className="relative flex justify-center text-xs uppercase">
+            <span className="bg-card px-2 text-zinc-500">
+              or
+            </span>
+          </div>
+        </div>
+
+        <GithubSignInButton />
 
         <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">
           Don&apos;t have an account?{' '}

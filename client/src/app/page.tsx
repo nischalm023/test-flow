@@ -9,6 +9,7 @@ import { TestCaseBuilder } from '@/components/TestCaseBuilder';
 import { TestCaseRunner } from '@/components/TestCaseRunner';
 import { TestSuiteManager } from '@/components/TestSuiteManager';
 import { CodeExportModal } from '@/components/CodeExportModal';
+import { GithubRepoList, type GithubRepo } from '@/features/auth/components/repos';
 
 const TEST_CASES_KEY = 'qa_studio_test_cases';
 
@@ -29,7 +30,7 @@ function loadSavedTestCases(): TestCase[] | null {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'scanner' | 'builder' | 'runner' | 'suite'>('scanner');
+  const [activeTab, setActiveTab] = useState<'scanner' | 'builder' | 'runner' | 'suite' | 'repos'>('scanner');
   const [scannedPage, setScannedPage] = useState<ScannedPage | null>(null);
   const [testCases, setTestCases] = useState<TestCase[]>(DEFAULT_PRESET_TEST_CASES);
   const [hydrated, setHydrated] = useState(false);
@@ -37,6 +38,7 @@ export default function App() {
   const [activeTestCase, setActiveTestCase] = useState<TestCase>(DEFAULT_PRESET_TEST_CASES[0]);
   const [exportModalTestCase, setExportModalTestCase] = useState<TestCase | null>(null);
   const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [scanningRepoId, setScanningRepoId] = useState<number | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -100,7 +102,14 @@ export default function App() {
       showToast('Page loaded in sandbox inspection mode.');
     } finally {
       setIsScanning(false);
+      setScanningRepoId(null);
     }
+  };
+
+  const handleScanRepo = async (repo: GithubRepo) => {
+    setScanningRepoId(repo.id);
+    setActiveTab('scanner');
+    await handleScanPage(repo.html_url);
   };
 
   const handleCreateTestCaseFromScan = (selectedElement?: ScannedElement) => {
@@ -289,6 +298,8 @@ export default function App() {
         return 'Live Execution & Interactive Browser';
       case 'suite':
         return 'Test Repository & QA Analytics';
+      case 'repos':
+        return 'GitHub Repositories & Projects';
     }
   };
 
@@ -379,6 +390,13 @@ export default function App() {
                 onCreateNewTestCase={() => handleCreateTestCaseFromScan()}
                 onDeleteTestCase={handleDeleteTestCase}
                 onOpenCodeExport={(tc) => setExportModalTestCase(tc)}
+              />
+            )}
+
+            {activeTab === 'repos' && (
+              <GithubRepoList
+                onScanRepo={handleScanRepo}
+                scanningRepoId={scanningRepoId}
               />
             )}
           </div>
