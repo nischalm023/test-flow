@@ -1,83 +1,81 @@
-#  Playwright Automation
+# Playwright Test Automation
 
+Playwright + TypeScript end-to-end test suite for the **TestFlow AI** app (`client/` Next.js frontend, `server/` API, Qdrant vector DB), with three Cursor agents — **Planner**, **Generator**, **Healer** — that plan, generate, and self-heal specs.
 
-End-to-end test suite for the **Testflow** Next.js app, built with Playwright + TypeScript. Includes Cursor/VS Code agent definitions (Planner, Generator, Healer) wired to the `playwright-test` MCP server.
+![TestFlow AI — Interface Scanner](docs/screenshot.png)
 
-## Prerequisites
+![Architecture overview](docs/architecture.svg)
 
-- Node.js 20+
-- npm (for this repo's test runner) and [pnpm](https://pnpm.io) (for the `client/` app)
+## Stack
 
-## 1. Install dependencies
-
-```bash
-npm install
-```
-
-Install the Playwright browsers (Chromium, Firefox, WebKit):
-
-```bash
-npx playwright install
-```
-
-Then install the `client/` app dependencies:
-
-```bash
-cd client && pnpm install && cd ..
-```
-
-## 2. Run the client app
-
-Tests drive the EventFlow client at `http://localhost:4000`. Playwright starts it automatically via the `webServer` config in [playwright.config.ts](playwright.config.ts), so you normally don't need to start it manually. To run it yourself for manual testing:
-
-```bash
-cd client && pnpm dev
-```
-
-> All API calls in tests are mocked with `page.route()` (see `src/utils/mock-auth-api.ts`) — tests never hit a real backend on port 3000.
-
-## 3. Run tests
-
-```bash
-npx playwright test
-```
-
-Useful variants:
-
-```bash
-npx playwright test --ui          # interactive UI mode
-npx playwright test tests/auth    # run a single folder/spec
-npx playwright show-report        # open the last HTML report
-```
-
-## 4. MCP server setup (Playwright agents)
-
-This repo ships three Cursor/VS Code agents — **Planner**, **Generator**, **Healer** (see [AGENTS.md](AGENTS.md)) — that use the `playwright-test` MCP server for browser tools.
-
-The server is already configured to run via `npx playwright run-test-mcp-server` in:
-
-- [.vscode/mcp.json](.vscode/mcp.json) — Cursor / VS Code
-- [.agents/mcp_config.json](.agents/mcp_config.json) — Cursor agents
-
-To use it:
-
-1. Open this repo in Cursor or VS Code.
-2. Enable the server under **Settings → MCP** (it should appear as `playwright-test`).
-3. Invoke an agent (Planner, Generator, or Healer) — it will use the MCP server's browser tools automatically.
-
-No manual install is required beyond `npm install`, since `npx` resolves `playwright` from the local `@playwright/test` dependency.
+- Playwright 1.56+ with TypeScript
+- Node 20+
+- Test runner: `@playwright/test`, HTML reporter (Allure optional in CI)
+- CI: GitHub Actions, sharded
 
 ## Folder structure
 
 | Path | Purpose |
 |------|---------|
-| `client/` | EventFlow Next.js app under test (port 4000) |
-| `src/pages/` | Page Object classes |
-| `src/fixtures/` | Custom Playwright fixtures |
-| `src/utils/` | Helpers (e.g. API mocking) |
+| `src/pages/` | Page Object classes (one file per page) |
+| `src/fixtures/` | Custom fixtures extending base `test` |
+| `src/utils/` | Pure helpers (e.g. `mock-auth-api.ts` for blocking API calls) |
 | `tests/` | Spec files, mirroring app URL structure |
 | `tests/data/` | JSON/CSV test data |
-| `specs/` | Planner-generated test plans |
-| `.agents/`, `.github/agents/` | Agent + MCP config for Planner/Generator/Healer |
+| `specs/` | Planner output (Markdown test plans) |
+| `client/` | TestFlow AI Next.js app under test |
+| `server/` | API backend |
+| `.agents/skills/` | Cursor agent skill definitions |
+| `.github/agents/` | Agent definitions with MCP tool bindings |
 
-See [AGENTS.md](AGENTS.md) for coding conventions, locator priorities, and the full agent workflow.
+## Getting started
+
+```bash
+npm install
+npx playwright install
+npx playwright test
+```
+
+Run a single spec or filter by tag:
+
+```bash
+npx playwright test tests/auth/login.spec.ts
+npx playwright test --grep @smoke
+```
+
+View the HTML report after a run:
+
+```bash
+npx playwright show-report
+```
+
+## Agent workflow
+
+1. **Planner** explores the TestFlow AI client (`http://localhost:4000`) and writes a numbered test plan to `specs/<feature>.md`.
+2. **Generator** turns a plan scenario into page objects and a runnable spec under `tests/`, mocking API calls with `page.route()`.
+3. **Healer** runs failing tests and fixes locators in `src/pages/` until the suite is green.
+
+See [AGENTS.md](./AGENTS.md) for the full rules these agents follow (locator priority, assertion rules, coding conventions).
+
+### MCP servers
+
+Two MCP servers are configured for editor/agent use (`.vscode/mcp.json`, `.agents/mcp_config.json`):
+
+| Server | Command | Purpose |
+|--------|---------|---------|
+| `playwright-test` | `npx playwright run-test-mcp-server` | Test planning/generation/healing (Planner, Generator, Healer) |
+| `playwright` | `npx @playwright/mcp@latest` | General browser automation (navigate, click, snapshot) for ad-hoc exploration |
+
+Enable them in Cursor/VS Code under **Settings → MCP**.
+
+## Conventions
+
+- Import `test`/`expect` from `src/fixtures/base.ts`, never directly from `@playwright/test`.
+- Locator priority: `getByRole` → `getByLabel` → `getByPlaceholder` → `getByTestId` → `getByText`. CSS/XPath is forbidden unless approved in a PR.
+- Web-first assertions only — no `page.waitForTimeout` or `waitForSelector`.
+- All client API calls are mocked in tests; never hit a real backend from a spec.
+
+## Docs
+
+- [AGENTS.md](./AGENTS.md) — full agent rules and conventions
+- [specs/README.md](./specs/README.md) — test plan index
