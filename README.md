@@ -1,7 +1,7 @@
 #  Playwright Automation
 
 
-End-to-end test suite for the **EventFlow** Next.js app, built with Playwright + TypeScript. Includes Cursor/VS Code agent definitions (Planner, Generator, Healer) wired to the `playwright-test` MCP server.
+End-to-end test suite for the **Testflow** Next.js app, built with Playwright + TypeScript. Includes Cursor/VS Code agent definitions (Planner, Generator, Healer) wired to the `playwright-test` MCP server.
 
 ## Prerequisites
 
