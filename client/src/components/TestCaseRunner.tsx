@@ -341,7 +341,9 @@ export const TestCaseRunner: React.FC<TestCaseRunnerProps> = ({
               <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-mono">
                 {testCase.category}
               </span>
-              <span className={`text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+              <span
+                data-testid="run-status-badge"
+                className={`text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
                 isRunning ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse' :
                 isAllFinished && passedStepsCount === stepsState.length ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
                 'bg-slate-100 text-slate-700 border-slate-200'

@@ -2,9 +2,11 @@ import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { Octokit } from 'octokit';
 import type { User } from '@/types';
 
-export const GITHUB_STATE_COOKIE = 'github_oauth_state';
-export const GITHUB_SESSION_COOKIE = 'github_pending_session';
-export const GITHUB_ACCESS_COOKIE = 'github_access_token';
+export {
+  GITHUB_ACCESS_COOKIE,
+  GITHUB_SESSION_COOKIE,
+  GITHUB_STATE_COOKIE,
+} from '@/lib/github-oauth-cookies';
 
 export function githubCredentials() {
   const clientId = process.env.AUTH_GITHUB_ID;

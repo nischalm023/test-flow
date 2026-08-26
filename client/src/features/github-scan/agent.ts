@@ -3,16 +3,15 @@ import { ChatOpenRouter } from "@langchain/openrouter";
 import { createAgent, modelFallbackMiddleware, tool } from "langchain";
 import { Octokit } from "octokit";
 import { z } from "zod";
-
 const SKIP_PATH = /(^|\/)(node_modules|\.git|\.next|dist|build|coverage|\.turbo)(\/|$)/;
 const MAX_FILES = 180;
 const MAX_FILE_CHARS = 12_000;
 
-function claudeModel() {
+function claudeModel(maxTokens = 2048) {
   return new ChatAnthropic({
     model: process.env.CHAT_MODEL || "claude-sonnet-4-20250514",
     apiKey: process.env.ANTHROPIC_API_KEY,
-    maxTokens: 2048,
+    maxTokens,
   });
 }
 
@@ -22,9 +21,21 @@ function openRouterModel() {
     apiKey: process.env.OPENROUTER_API_KEY,
     siteName: "TestFlow AI",
     // ponytail: OpenRouter reserves max_tokens against remaining credits (402 at 2048).
-    maxTokens: 1024,
+    maxTokens: 2048,
   });
 }
+
+function nvidiaModel() {
+  // ponytail: NVIDIA's API is OpenAI-compatible; ChatOpenRouter already speaks that format.
+  return new ChatOpenRouter({
+    model: process.env.NVIDIA_MODEL || "nvidia/nemotron-3.5-lightning-30b-a3b",
+    apiKey: process.env.NVIDIA_API_KEY,
+    baseURL: "https://integrate.api.nvidia.com/v1",
+    siteName: "TestFlow AI",
+    maxTokens: 4096,
+  });
+}
+
 
 function decodeContent(encoded: string, encoding?: string) {
   if (encoding === "base64") {
@@ -33,7 +44,12 @@ function decodeContent(encoded: string, encoding?: string) {
   return encoded;
 }
 
-export function createRepoScanAgent(token: string, owner: string, repo: string) {
+export function createRepoScanAgent(
+  token: string,
+  owner: string,
+  repo: string,
+  mode: "report" | "structure-flow" | "suggest-prompts" = "report",
+) {
   const octokit = new Octokit({ auth: token, userAgent: "TestFlow-AI" });
 
   const getRepo = tool(
@@ -136,18 +152,44 @@ export function createRepoScanAgent(token: string, owner: string, repo: string) 
     },
   );
 
-  const hasClaude = Boolean(process.env.ANTHROPIC_API_KEY);
-  const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
+  const fallbacks = [
+    process.env.OPENROUTER_API_KEY ? openRouterModel() : null,
+    process.env.NVIDIA_API_KEY ? nvidiaModel() : null,
+  ].filter((model): model is ReturnType<typeof openRouterModel> => model != null);
 
-  const model = hasClaude ? claudeModel() : openRouterModel();
-  const middleware =
-    hasClaude && hasOpenRouter ? [modelFallbackMiddleware(openRouterModel())] : [];
+  const systemPrompt =
+    mode === "suggest-prompts"
+      ? `You are a GitHub QA architect and Playwright test specialist.
+Inspect ${owner}/${repo} using the tools (getRepo, listFiles, readFile for package.json, README, router/pages/app directories, api routes).
 
-  return createAgent({
-    model,
-    tools: [getRepo, getLanguages, listFiles, readFile],
-    middleware,
-    systemPrompt: `You are a GitHub repository analyst.
+Based on the actual project files, routes, components, and libraries found in this repository, generate 5 to 7 specific, actionable Playwright test prompt templates tailored directly to what actually exists in ${owner}/${repo}.
+
+Output ONLY a raw JSON array (no markdown fences, no surrounding text) with this schema:
+[
+  {
+    "id": "case-id",
+    "title": "Concise Scenario Title",
+    "category": "Domain Category (e.g. Auth & Security, Checkout, Dashboard, API Mocking, Navigation)",
+    "badge": "Badge (e.g. Core Flow, High Value, Detected, Auth)",
+    "icon": "shield" | "sparkles" | "layers" | "workflow" | "zap" | "fileCode",
+    "description": "1-2 sentence description referencing specific routes/features found in this repo",
+    "prompt": "Detailed multi-step test instructions referencing real repo routes/pages/actions"
+  }
+]`
+      : mode === "structure-flow"
+        ? `You are a GitHub repository analyst.
+Use the tools to inspect ${owner}/${repo}. The user will describe what they care about.
+
+After inspecting, output ONLY these two blocks, in this order, with the exact markers:
+
+<<<STRUCTURE>>>
+An ASCII folder/page tree: directories, routes/pages, and important files.
+
+<<<FLOW>>>
+The product/user flows that match the user's prompt. Numbered steps. If the prompt is vague, cover the main happy paths.
+
+Do not invent files you did not see via tools. No preamble, no closing commentary.`
+        : `You are a GitHub repository analyst.
 Use the tools to inspect ${owner}/${repo}, then write a detailed markdown report covering:
 - What the project is and who it is for
 - Tech stack and languages
@@ -156,6 +198,12 @@ Use the tools to inspect ${owner}/${repo}, then write a detailed markdown report
 - Notable implementation details
 
 Prefer README, package manifests, and a few representative source files over dumping the whole tree.
-Write the final answer as readable markdown. Do not invent files you did not read.`,
+Write the final answer as readable markdown. Do not invent files you did not read.`;
+
+  return createAgent({
+    model: claudeModel(mode === "structure-flow" || mode === "suggest-prompts" ? 4096 : 2048),
+    tools: [getRepo, getLanguages, listFiles, readFile],
+    middleware: fallbacks.length ? [modelFallbackMiddleware(...fallbacks)] : [],
+    systemPrompt,
   });
 }

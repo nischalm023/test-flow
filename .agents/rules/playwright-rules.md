@@ -104,6 +104,17 @@ The app under test lives in `client/` (Next.js on port **4000**). Auth pages:
 - Load test data from `tests/data/`, not inline
 - Tag tests with `@smoke`, `@regression`, or `@critical` as appropriate
 
+## Scanned / user repositories (Create Test)
+
+- "Create Test" (`client/src/app/api/github/create-test/route.ts`) writes Playwright + MCP
+  setup into a *user's* scanned GitHub repository via the GitHub API — never into this
+  repository's own working tree.
+- All writes target a new branch (`qa-studio/playwright-setup`) on the target repo, never
+  its default branch. The route checks the branch doesn't already exist first and fails
+  (409) rather than overwriting it.
+- Do not modify this repo's own `playwright.config.ts`, `tests/`, `.agents/`, or `.vscode/`
+  files as a side effect of a scan/create-test operation.
+
 ## Forbidden
 
 - Do not skip or comment out failing tests to make CI green

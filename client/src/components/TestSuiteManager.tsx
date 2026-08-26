@@ -246,6 +246,7 @@ ${tc.steps.map(s => `  ${s.order}. \`${s.action.toUpperCase()}\` -> Target: \`${
 
                   <button
                     onClick={() => onSelectTestCaseToRun(tc)}
+                    data-testid={`run-test-${tc.id}`}
                     className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 ml-1"
                   >
                     <Play className="w-3.5 h-3.5 fill-white" />

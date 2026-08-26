@@ -52,8 +52,23 @@ function chunkText(chunk: unknown): string {
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as { repo?: string; owner?: string; name?: string };
+  const body = (await req.json().catch(() => ({}))) as {
+    repo?: string;
+    owner?: string;
+    name?: string;
+    branch?: string;
+    prompt?: string;
+    mode?: "report" | "structure-flow" | "suggest-prompts";
+  };
   const parsed = parseRepo(body.repo) ?? (body.owner && body.name ? { owner: body.owner, repo: body.name } : null);
+  const branchName = body.branch?.trim() || "";
+  const mode =
+    body.mode === "structure-flow"
+      ? "structure-flow"
+      : body.mode === "suggest-prompts"
+        ? "suggest-prompts"
+        : "report";
+  const userPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   if (!parsed) {
     return new Response("Provide repo as owner/name", { status: 400 });
   }
@@ -73,16 +88,23 @@ export async function POST(req: Request) {
     async start(controller) {
       const write = (text: string) => controller.enqueue(encoder.encode(text));
       try {
-        write(`Scanning ${parsed.owner}/${parsed.repo}…\n\n`);
-        const agent = createRepoScanAgent(token, parsed.owner, parsed.repo);
+        const branchContext = branchName ? ` (branch: ${branchName})` : "";
+        if (mode === "report") write(`Scanning ${parsed.owner}/${parsed.repo}${branchContext}…\n\n`);
+        const agent = createRepoScanAgent(token, parsed.owner, parsed.repo, mode);
+        const userContent =
+          mode === "suggest-prompts"
+            ? `Scan GitHub repo ${parsed.owner}/${parsed.repo}${branchContext} and output 5 to 7 specific  QA test prompt templates based on its actual routes, pages, and components as raw JSON array.`
+            : mode === "structure-flow"
+              ? `Scan GitHub repo ${parsed.owner}/${parsed.repo}${branchContext}.
+The user described the project as:
+"""
+${userPrompt || "(no extra prompt — cover the main layout and flows)"}
+"""
+Use their prompt to decide which flows matter.`
+              : `Scan GitHub repo ${parsed.owner}/${parsed.repo}${branchContext} and describe it in detail.`;
         const events = await agent.stream(
           {
-            messages: [
-              {
-                role: "user",
-                content: `Scan GitHub repo ${parsed.owner}/${parsed.repo} and describe it in detail.`,
-              },
-            ],
+            messages: [{ role: "user", content: userContent }],
           },
           { streamMode: "messages" },
         );
