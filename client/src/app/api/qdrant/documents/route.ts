@@ -6,12 +6,13 @@ import {
   qdrantCollection,
   qdrantUrl,
 } from "@/lib/qdrant";
+import { formatRepoOverviewMarkdown, summarizeRepoDocuments } from "@/lib/repo-overview";
 
 export const runtime = "nodejs";
 
 /**
  * GET /api/qdrant/documents?repo=owner/name
- * Return every point in the documents collection (full payload).
+ * Return a concise README-style overview of the repo (not every Qdrant point).
  */
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -23,6 +24,11 @@ export async function GET(req: Request) {
       loadDocumentCollection(repo),
       collectionInfo(collection).catch(() => null),
     ]);
+    const scoped = repo
+      ? points.filter((point) => point.payload?.githubRepo === repo)
+      : points;
+
+    const overview = summarizeRepoDocuments(scoped.map(formatDocumentPoint), repo ?? "");
 
     return NextResponse.json({
       ok: true,
@@ -32,7 +38,8 @@ export async function GET(req: Request) {
       pointsCount: info?.result?.points_count ?? points.length,
       indexedVectorsCount: info?.result?.indexed_vectors_count ?? 0,
       status: info?.result?.status ?? "unknown",
-      documents: points.map(formatDocumentPoint),
+      overview,
+      markdown: formatRepoOverviewMarkdown(overview),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load documents collection";

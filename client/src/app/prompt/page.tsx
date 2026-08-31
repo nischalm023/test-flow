@@ -9,9 +9,11 @@ import {
   Check,
   Copy,
   Database,
+  ExternalLink,
   FileCode,
   FolderTree,
   GitBranch,
+  Info,
   ListChecks,
   MessageSquareText,
   Play,
@@ -98,24 +100,45 @@ function PromptView() {
     filesWritten: string[];
     filesFailed: { path: string; error: string }[];
   } | null>(null);
+  const [isRunningAllTests, setIsRunningAllTests] = useState(false);
+  const [runAllTestsResult, setRunAllTestsResult] = useState<{
+    ok?: boolean;
+    allPassed?: boolean;
+    roundsExecuted?: number;
+    specFilesCount?: number;
+    filesCommitted?: string[];
+    history?: any[];
+  } | null>(null);
   const [appUrl, setAppUrl] = useState('');
   const [isRegenerating, setIsRegenerating] = useState(false);
-  const [documents, setDocuments] = useState<Record<string, unknown>[]>([]);
   const [documentsMeta, setDocumentsMeta] = useState<{
     collection: string;
     pointsCount: number;
     status: string;
     error?: string;
   } | null>(null);
+  const [repoOverview, setRepoOverview] = useState<{
+    name: string;
+    purpose: string;
+    techStack: string[];
+    ports: { service: string; port: string }[];
+  } | null>(null);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [isGeneratingFromDocs, setIsGeneratingFromDocs] = useState(false);
   const [generatedSpec, setGeneratedSpec] = useState<{ filePath: string; code: string } | null>(null);
+  const [repoDetails, setRepoDetails] = useState<{
+    htmlUrl: string;
+    details: Record<string, unknown>;
+  } | null>(null);
+  const [repoDetailsLoading, setRepoDetailsLoading] = useState(false);
+  const [repoDetailsError, setRepoDetailsError] = useState('');
 
   const setStep = (key: StepKey, value: StepStatus) =>
     setSteps((prev) => ({ ...prev, [key]: value }));
 
   const abortRef = useRef<AbortController | null>(null);
   const streamAreaRef = useRef<HTMLTextAreaElement>(null);
+  const scanResultsRef = useRef<HTMLDivElement>(null);
   const pendingAnalysisRef = useRef<{ textToAnalyze: string; abort: AbortController } | null>(null);
 
   useEffect(() => {
@@ -237,6 +260,9 @@ function PromptView() {
           toast.warning(qdrant?.error || 'Could not save test cases to Qdrant');
         }
         await commitGeneratedTests(scanId, resolvedBranch, cases);
+        if (resolvedBranch) {
+          void triggerRunAllTests(repo, resolvedBranch);
+        }
       } else {
         setStep('generate', 'error');
         toast.error(data.error || 'Could not generate test cases from the extracted flow');
@@ -244,6 +270,37 @@ function PromptView() {
     } catch (err) {
       setStep('generate', 'error');
       toast.error(err instanceof Error ? err.message : 'Could not generate test cases from the extracted flow');
+    }
+  };
+
+  const triggerRunAllTests = async (targetRepo?: string, targetBranch?: string) => {
+    const r = targetRepo || repo;
+    const b = targetBranch || setupInfo?.branch || branch || 'qa-studio/playwright-setup';
+    if (!r) return;
+
+    setIsRunningAllTests(true);
+    toast.info('🚀 Triggered Run All Tests & Claude AI Self-Healing...', {
+      description: `Branch: ${b}`,
+    });
+
+    try {
+      const res = await fetch('/api/github/run-all-tests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: r, branch: b, maxRetries: 3 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setRunAllTestsResult(data);
+
+      if (data.ok) {
+        toast.success(`🎉 All ${data.specFilesCount || 0} Playwright tests passed & verified!`);
+      } else {
+        toast.info(`Tests completed with self-healing (${data.roundsExecuted || 0} rounds). Committed fixes: ${data.filesCommitted?.length || 0}`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to execute run-all-tests pipeline');
+    } finally {
+      setIsRunningAllTests(false);
     }
   };
 
@@ -407,9 +464,34 @@ function PromptView() {
     setStatus('idle');
   };
 
+  const loadRepoDetails = async () => {
+    if (!repo.includes('/')) {
+      setRepoDetails(null);
+      setRepoDetailsError('');
+      return;
+    }
+    setRepoDetailsLoading(true);
+    setRepoDetailsError('');
+    try {
+      const res = await fetch(`/api/github/repo-details?repo=${encodeURIComponent(repo)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRepoDetails(null);
+        setRepoDetailsError(data.error || 'Could not load repository details');
+        return;
+      }
+      setRepoDetails(data);
+    } catch (err) {
+      setRepoDetails(null);
+      setRepoDetailsError(err instanceof Error ? err.message : 'Could not load repository details');
+    } finally {
+      setRepoDetailsLoading(false);
+    }
+  };
+
   const loadDocumentsCollection = async () => {
     if (!repo.includes('/')) {
-      setDocuments([]);
+      setRepoOverview(null);
       setDocumentsMeta(null);
       return;
     }
@@ -418,7 +500,7 @@ function PromptView() {
       const res = await fetch(`/api/qdrant/documents?repo=${encodeURIComponent(repo)}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.ok === false) {
-        setDocuments([]);
+        setRepoOverview(null);
         setDocumentsMeta({
           collection: data.collection || 'documents',
           pointsCount: 0,
@@ -427,14 +509,14 @@ function PromptView() {
         });
         return;
       }
-      setDocuments(Array.isArray(data.documents) ? data.documents : []);
+      setRepoOverview(data.overview ?? null);
       setDocumentsMeta({
         collection: data.collection || 'documents',
         pointsCount: data.pointsCount ?? 0,
         status: data.status || 'unknown',
       });
     } catch (err) {
-      setDocuments([]);
+      setRepoOverview(null);
       setDocumentsMeta({
         collection: 'documents',
         pointsCount: 0,
@@ -474,14 +556,6 @@ function PromptView() {
           code: data.playwrightTestCode,
         });
       }
-      if (Array.isArray(data.documents)) {
-        setDocuments(data.documents);
-        setDocumentsMeta((prev) => ({
-          collection: data.collection || prev?.collection || 'documents',
-          pointsCount: data.documents.length,
-          status: prev?.status || 'green',
-        }));
-      }
       toast.success(`Generated Playwright test: ${testCase.title}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not generate a Playwright test');
@@ -494,39 +568,31 @@ function PromptView() {
 
   useEffect(() => {
     void loadDocumentsCollection();
+    void loadRepoDetails();
   }, [repo]);
 
   // Background indexing of repo README into Kafka -> VoyageAI -> Qdrant vector store
-  useEffect(() => {
-    if (!repo || !repo.includes('/') || indexedRepoRef.current === `${repo}:${branch}`) {
-      return;
-    }
-    indexedRepoRef.current = `${repo}:${branch}`;
-
-    fetch('/api/github/index-readme', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo, branch: branch || undefined }),
-    })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.success) {
-          console.log(`[Prompt Page] 📚 Indexed ${data.totalChunks} README chunks to Kafka topic "${data.topic}"`);
-          window.setTimeout(() => {
-            void loadDocumentsCollection();
-          }, 2500);
-        }
-      })
-      .catch((err) => {
-        console.warn('[Prompt Page] Background README indexing error:', err);
-      });
-  }, [repo, branch]);
 
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
     };
   }, []);
+
+  const repoName = typeof repoDetails?.details?.name === 'string' ? repoDetails.details.name : '';
+  const repoPurpose =
+    typeof repoDetails?.details?.description === 'string' ? repoDetails.details.description : '';
+  const repoTechStack = [
+    ...(typeof repoDetails?.details?.language === 'string' ? [repoDetails.details.language] : []),
+    ...(Array.isArray(repoDetails?.details?.topics) ? (repoDetails.details.topics as string[]) : []),
+  ];
+  const overviewName = repoOverview?.name || repoName || repo.split('/')[1] || '';
+  const overviewPurpose = repoOverview?.purpose || repoPurpose;
+  const overviewTech = [...new Set([...(repoOverview?.techStack ?? []), ...repoTechStack])];
+  const overviewPorts = repoOverview?.ports ?? [];
+  const hasRepoOverview = Boolean(
+    overviewName || overviewPurpose || overviewTech.length > 0 || overviewPorts.length > 0,
+  );
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 pb-16">
@@ -627,6 +693,106 @@ function PromptView() {
           </div>
         )}
 
+        {/* {repo.includes('/') && (
+          <Card className="border-slate-200 shadow-xs">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-base font-bold text-slate-900">
+                    <Info className="w-4 h-4 text-slate-700" />
+                    Repository Details
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500 mt-0.5">
+                    GitHub metadata and scan status for {repo}
+                  </CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={repoDetailsLoading}
+                  onClick={() => void loadRepoDetails()}
+                  className="text-xs h-8"
+                >
+                  {repoDetailsLoading ? 'Loading…' : 'Refresh'}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {repoDetailsError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs">
+                  {repoDetailsError}
+                </div>
+              )}
+
+              {repoDetailsLoading && !repoDetails ? (
+                <p className="text-xs text-slate-400">Loading repository details…</p>
+              ) : repoDetails ? (
+                <>
+                  <a
+                    href={repoDetails.htmlUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-semibold text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-1"
+                  >
+                    {repo}
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+
+                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-[420px] overflow-y-auto pr-1">
+                    {Object.entries(repoDetails.details).map(([key, value]) => (
+                      <div key={key} className="grid grid-cols-[140px_1fr] gap-2">
+                        <dt className="font-mono text-[10px] uppercase tracking-wide text-slate-400 pt-0.5">
+                          {key}
+                        </dt>
+                        <dd className="font-mono text-[11px] text-slate-700 whitespace-pre-wrap break-words">
+                          {typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </>
+              ) : (
+                <p className="text-xs text-slate-400">Could not load repository metadata yet.</p>
+              )}
+
+              <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-500">Scan status:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('structure');
+                    scanResultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                  className={`px-2.5 py-1 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 transition-colors ${
+                    structure
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+                      : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                  }`}
+                >
+                  <FolderTree className="w-3.5 h-3.5" />
+                  Structure ({structure ? 'Ready' : 'Not scanned'})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('flow');
+                    scanResultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                  className={`px-2.5 py-1 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 transition-colors ${
+                    flow
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+                      : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                  }`}
+                >
+                  <ListChecks className="w-3.5 h-3.5" />
+                  Flows ({flow ? 'Ready' : 'Not scanned'})
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+        )} */}
+
         <PromptsCard
           repo={repo}
           selectedPresetId={selectedPresetId}
@@ -639,16 +805,10 @@ function PromptView() {
               <div>
                 <CardTitle className="flex items-center gap-2 text-base font-bold text-slate-900">
                   <Database className="w-4 h-4 text-slate-700" />
-                  Documents collection
+                  Documents
                 </CardTitle>
                 <CardDescription className="text-xs text-slate-500 mt-0.5">
-                  {documentsMeta
-                    ? `${documentsMeta.collection} · ${documents.length} loaded${
-                        documentsMeta.pointsCount !== documents.length
-                          ? ` / ${documentsMeta.pointsCount} in Qdrant`
-                          : ''
-                      } · status ${documentsMeta.status}`
-                    : 'Indexed README and code chunks from Qdrant'}
+                  Essential repository details from the indexed README
                 </CardDescription>
               </div>
               <Button
@@ -669,38 +829,35 @@ function PromptView() {
                 {documentsMeta.error}
               </div>
             )}
-            {documentsLoading && documents.length === 0 ? (
-              <p className="text-xs text-slate-400">Loading documents collection…</p>
-            ) : documents.length === 0 ? (
-              <p className="text-xs text-slate-400">
-                No points in the documents collection yet. Index a README, then refresh.
-              </p>
-            ) : (
-              <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
-                {documents.map((doc, index) => (
-                  <div
-                    key={String(doc.id ?? index)}
-                    className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2"
-                  >
-                    <p className="font-semibold text-slate-800">
-                      #{index + 1}
-                      {doc.title ? ` · ${String(doc.title)}` : ''}
+            {documentsLoading && !hasRepoOverview ? (
+              <p className="text-xs text-slate-400">Loading repository overview…</p>
+            ) : hasRepoOverview ? (
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm space-y-3">
+                <h2 className="text-base font-bold text-slate-900"># {overviewName || 'Repository'}</h2>
+                <p className="text-slate-700 text-xs leading-relaxed">
+                  {overviewPurpose || 'No project description found in the indexed README.'}
+                </p>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 mb-1">## Tech stack</h3>
+                  <p className="font-mono text-xs text-slate-700">
+                    {overviewTech.length > 0 ? overviewTech.join(', ') : 'Not specified'}
+                  </p>
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 mb-1">## Ports</h3>
+                  {overviewPorts.length > 0 ? (
+                    <p className="text-xs font-mono text-slate-700">
+                      {overviewPorts.map((item) => item.port).join(', ')}
                     </p>
-                    <dl className="grid grid-cols-1 gap-1.5">
-                      {Object.entries(doc).map(([key, value]) => (
-                        <div key={key} className="grid grid-cols-[140px_1fr] gap-2">
-                          <dt className="font-mono text-[10px] uppercase tracking-wide text-slate-400 pt-0.5">
-                            {key}
-                          </dt>
-                          <dd className="font-mono text-[11px] text-slate-700 whitespace-pre-wrap break-words">
-                            {typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </div>
-                ))}
+                  ) : (
+                    <p className="text-xs text-slate-500">Not specified in the indexed README</p>
+                  )}
+                </div>
               </div>
+            ) : (
+              <p className="text-xs text-slate-400">
+                No README overview yet. Index a README, then refresh.
+              </p>
             )}
             {generatedSpec && (
               <div className="pt-2 space-y-2">
@@ -842,7 +999,7 @@ function PromptView() {
 
         {/* Scan Results: Live Stream, Structure & Flow */}
         {(streamText || structure || flow || status === 'streaming') && (
-          <Card className="border-slate-200 shadow-sm overflow-hidden animate-fadeIn">
+          <Card ref={scanResultsRef} className="border-slate-200 shadow-sm overflow-hidden animate-fadeIn">
             <CardHeader className="bg-slate-50 border-b border-slate-200 py-3.5 px-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -1087,6 +1244,37 @@ function PromptView() {
                       )}
                     </div>
                   )}
+
+                  <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 text-white space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="text-xs font-semibold text-slate-200">Playwright Test Runner & Claude AI Healer</span>
+                      </div>
+                      <Button
+                        size="sm"
+                        disabled={isRunningAllTests}
+                        onClick={() => void triggerRunAllTests()}
+                        className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-3 py-1"
+                      >
+                        {isRunningAllTests ? 'Running & Healing…' : '▶ Run All Tests & Auto-Heal'}
+                      </Button>
+                    </div>
+
+                    {runAllTestsResult && (
+                      <div className="text-xs space-y-1 pt-2 border-t border-slate-800">
+                        <div className="flex items-center justify-between text-slate-300">
+                          <span>Status: <strong className={runAllTestsResult.ok ? 'text-emerald-400' : 'text-amber-400'}>{runAllTestsResult.ok ? 'Passed 100%' : 'Fixed with AI Retries'}</strong></span>
+                          <span>Specs: {runAllTestsResult.specFilesCount || 0}</span>
+                        </div>
+                        {runAllTestsResult.filesCommitted && runAllTestsResult.filesCommitted.length > 0 && (
+                          <p className="text-emerald-400 font-mono">
+                            ✓ Pushed {runAllTestsResult.filesCommitted.length} healed spec file(s) to GitHub branch!
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
 
                   {repo.includes('/') && (
                     <RunTestsInstructions

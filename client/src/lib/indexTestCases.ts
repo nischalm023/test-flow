@@ -3,9 +3,11 @@ import type { GeneratedFile } from "@/lib/playwrightCodegen";
 import { embedTexts } from "@/lib/embeddings";
 import {
   collectionInfo,
+  findPointByDocumentId,
   pointIdFor,
   qdrantTestCasesCollection,
   upsertPoints,
+  type ScrolledPoint,
 } from "@/lib/qdrant";
 
 export type TestCaseQdrantMeta = {
@@ -79,6 +81,7 @@ export async function indexTestCasesToQdrant(
         priority: tc.priority,
         targetUrl: tc.targetUrl,
         content: texts[i],
+        testCase: tc,
       },
     })),
     collection,
@@ -91,6 +94,38 @@ export async function indexTestCasesToQdrant(
     pointsCount: info.result?.points_count ?? testCases.length,
     indexed: testCases.length,
   };
+}
+
+/** Rebuild a TestCase from a Qdrant point's payload (falls back to flat fields for older points saved before full JSON was stored). */
+function testCaseFromPoint(point: ScrolledPoint): TestCase | null {
+  const payload = point.payload ?? {};
+  if (payload.testCase && typeof payload.testCase === "object") {
+    return payload.testCase as TestCase;
+  }
+  if (!payload.documentId) return null;
+  return {
+    id: String(payload.documentId),
+    title: String(payload.title ?? "Untitled Test Case"),
+    description: String(payload.description ?? ""),
+    priority: (payload.priority as TestCase["priority"]) ?? "medium",
+    category: (payload.category as TestCase["category"]) ?? "Functional",
+    status: "ready",
+    targetUrl: String(payload.targetUrl ?? ""),
+    steps: [],
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Fetch a single generated test case back from the generated_tests collection by its documentId.
+ */
+export async function fetchTestCaseFromQdrant(
+  documentId: string,
+  collection: string = qdrantTestCasesCollection(),
+): Promise<TestCase | null> {
+  const point = await findPointByDocumentId(documentId, collection);
+  if (!point) return null;
+  return testCaseFromPoint(point);
 }
 
 export interface IndexGeneratedTestFilesOptions {

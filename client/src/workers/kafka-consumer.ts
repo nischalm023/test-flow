@@ -1,7 +1,7 @@
 import { createKafkaConsumer, ensureTopicsExist, KAFKA_CONSUMER_GROUPS, KAFKA_TOPICS } from "../lib/kafka";
 import { IndexingEventPayload, QueryEventPayload, ReadmeChunkIndexingPayload, TestRunEventPayload } from "../types/kafka";
 import { embedTexts } from "../lib/embeddings";
-import { collectionInfo, pointIdFor, qdrantCollection, upsertPoints } from "../lib/qdrant";
+import { collectionInfo, pointIdFor, QdrantPoint, qdrantCollection, upsertPoints } from "../lib/qdrant";
 
 /**
  * Execute an async operation with up to `maxRetries` (default: 3) attempts
@@ -14,6 +14,7 @@ export async function withRetry<T>(
     initialDelayMs?: number;
     backoffFactor?: number;
     operationName?: string;
+    heartbeat?: () => Promise<void>;
   } = {}
 ): Promise<T> {
   const maxRetries = options.maxRetries ?? 3;
@@ -35,13 +36,85 @@ export async function withRetry<T>(
       if (attempt < maxRetries) {
         const delay = initialDelayMs * Math.pow(backoffFactor, attempt - 1);
         console.log(`[Worker Retry] ⏳ Retrying in ${delay}ms...`);
+        await options.heartbeat?.();
         await new Promise((resolve) => setTimeout(resolve, delay));
+        await options.heartbeat?.();
       }
     }
   }
 
   console.error(`[Worker Retry] ❌ All ${maxRetries} retry attempts failed for ${opName}.`);
   throw lastError;
+}
+
+async function embedAndUpsertBatch(
+  points: Array<{ documentId: string; content: string; payload: Record<string, unknown>; collection: string }>,
+  heartbeat: () => Promise<void>,
+  operationName: string,
+): Promise<{ count: number; embedDurationMs: number; dbDurationMs: number; totalDurationMs: number }> {
+  if (points.length === 0) return { count: 0, embedDurationMs: 0, dbDurationMs: 0, totalDurationMs: 0 };
+
+  const startBatchTime = Date.now();
+
+  // 1. Measure Embedding Generation Time
+  const embedStart = Date.now();
+  const vectors = await withRetry(() => embedTexts(points.map((p) => p.content)), {
+    maxRetries: 3,
+    initialDelayMs: 1000,
+    operationName,
+    heartbeat,
+  });
+  const embedDurationMs = Date.now() - embedStart;
+  await heartbeat();
+
+  if (vectors.length !== points.length) {
+    throw new Error(`${operationName}: expected ${points.length} embeddings, got ${vectors.length}`);
+  }
+
+  const byCollection = new Map<string, QdrantPoint[]>();
+  for (let i = 0; i < points.length; i++) {
+    const item = points[i];
+    const list = byCollection.get(item.collection) ?? [];
+    list.push({
+      id: pointIdFor(item.documentId),
+      vector: vectors[i],
+      payload: item.payload,
+    });
+    byCollection.set(item.collection, list);
+  }
+
+  // 2. Measure Database Upsert Time
+  let totalDbDurationMs = 0;
+  for (const [collection, collectionPoints] of byCollection) {
+    const dbStart = Date.now();
+    await withRetry(() => upsertPoints(collectionPoints, collection), {
+      maxRetries: 3,
+      initialDelayMs: 1000,
+      operationName: `Qdrant batch upsert (${collectionPoints.length} points) into ${collection}`,
+      heartbeat,
+    });
+    const dbDurationMs = Date.now() - dbStart;
+    totalDbDurationMs += dbDurationMs;
+    await heartbeat();
+
+    const info = await collectionInfo(collection).catch(() => ({ result: { points_count: 0 } }));
+    console.log(
+      `[Worker] 💾 Database saved ${collectionPoints.length} point(s) to "${collection}" in ${dbDurationMs}ms (${info.result?.points_count ?? "?"} total in collection)`
+    );
+  }
+
+  const totalDurationMs = Date.now() - startBatchTime;
+  const avgPerChunk = (totalDurationMs / points.length).toFixed(1);
+  console.log(
+    `[Worker] ⏱️ Batch Process Timing: ${points.length} item(s) in ${totalDurationMs}ms (🧠 Embedding: ${embedDurationMs}ms | 💾 DB Save: ${totalDbDurationMs}ms | ⚡ Avg: ${avgPerChunk}ms/chunk)`
+  );
+
+  return {
+    count: points.length,
+    embedDurationMs,
+    dbDurationMs: totalDbDurationMs,
+    totalDurationMs,
+  };
 }
 
 async function main() {
@@ -67,136 +140,93 @@ async function main() {
 
   // 3. Register Topic Event Handlers
 
-  // Handler for README / Code Document Chunks (with 3x retry on VoyageAI and Qdrant save)
-  consumerService.registerHandler<ReadmeChunkIndexingPayload>(
+  consumerService.registerBatchHandler<ReadmeChunkIndexingPayload>(
     KAFKA_TOPICS.README_CHUNKS,
-    async (payload, meta) => {
+    async (items, heartbeat) => {
+      const batchStartTime = Date.now();
+      const valid = items.filter((item) => item.payload?.documentId && item.payload?.content);
+      const firstTimestamp = items[0]?.meta?.timestamp ? Number(items[0]?.meta?.timestamp) : null;
+      const kafkaLagMs = firstTimestamp ? Math.max(0, batchStartTime - firstTimestamp) : null;
+      const lagStr = kafkaLagMs !== null ? ` | ⏱️ Queue Lag: ${kafkaLagMs}ms` : "";
+
       console.log(
-        `[Worker] 📥 Received README_CHUNK on partition ${meta.partition}, offset ${meta.offset}: [${payload?.chunkIndex + 1}/${payload?.totalChunks}] ${payload?.documentId}`
+        `[Worker] 📥 [README_CHUNKS] Batch received: ${valid.length} chunk(s) on partition ${items[0]?.meta.partition} offsets ${items[0]?.meta.offset}-${items[items.length - 1]?.meta.offset}${lagStr}`
+      );
+      if (valid.length === 0) return;
+
+      const timing = await embedAndUpsertBatch(
+        valid.map(({ payload }) => ({
+          documentId: payload.documentId,
+          content: payload.content,
+          collection: payload.collection || qdrantCollection(),
+          payload: {
+            documentId: payload.documentId,
+            chunkIndex: payload.chunkIndex,
+            totalChunks: payload.totalChunks,
+            title: payload.title,
+            source: payload.source ?? "readme-chunk",
+            content: payload.content,
+            chunkSize: payload.chunkSize ?? 800,
+            chunkOverlap: payload.chunkOverlap ?? 150,
+            userId: payload.userId,
+            githubRepo:
+              payload.githubRepo ||
+              (payload.owner && payload.repo ? `${payload.owner}/${payload.repo}` : undefined),
+            owner: payload.owner,
+            repo: payload.repo,
+            branch: payload.branch,
+            metadata: payload.metadata,
+          },
+        })),
+        heartbeat,
+        `Embedding generation for ${valid.length} README chunk(s)`,
       );
 
-      if (!payload?.documentId || !payload?.content) {
-        console.warn("[Worker] Skipping README chunk with missing documentId/content");
-        return;
-      }
-
-      const collection = payload.collection || qdrantCollection();
-      const docId = payload.documentId;
-      const pointId = pointIdFor(docId);
-
-      // Step A: Generate Embedding with 3x retry
-      const [vector] = await withRetry(
-        () => embedTexts([payload.content]),
-        {
-          maxRetries: 3,
-          initialDelayMs: 1000,
-          operationName: `Embedding generation for chunk ${docId}`,
-        }
-      );
-
-      // Step B: Upsert into Qdrant Vector Store with 3x retry
-      await withRetry(
-        () =>
-          upsertPoints(
-            [
-              {
-                id: pointId,
-                vector,
-                payload: {
-                  documentId: payload.documentId,
-                  chunkIndex: payload.chunkIndex,
-                  totalChunks: payload.totalChunks,
-                  title: payload.title,
-                  source: payload.source ?? "readme-chunk",
-                  content: payload.content,
-                  chunkSize: payload.chunkSize ?? 800,
-                  chunkOverlap: payload.chunkOverlap ?? 150,
-                  userId: payload.userId,
-                  githubRepo:
-                    payload.githubRepo ||
-                    (payload.owner && payload.repo ? `${payload.owner}/${payload.repo}` : undefined),
-                  owner: payload.owner,
-                  repo: payload.repo,
-                  branch: payload.branch,
-                  metadata: payload.metadata,
-                },
-              },
-            ],
-            collection
-          ),
-        {
-          maxRetries: 3,
-          initialDelayMs: 1000,
-          operationName: `Qdrant upsert for chunk ${docId}`,
-        }
-      );
-
-      const info = await collectionInfo(collection).catch(() => ({ result: { points_count: 0 } }));
+      const totalBatchTime = Date.now() - batchStartTime;
       console.log(
-        `[Worker] ✅ Saved README chunk [${payload.chunkIndex + 1}/${payload.totalChunks}] to Qdrant collection "${collection}" (${info.result?.points_count ?? "?"} total points)`
+        `[Worker] 🏁 [README_CHUNKS] Finished consuming & saving ${valid.length} chunk(s) into database in ${totalBatchTime}ms (Embedding: ${timing.embedDurationMs}ms | DB Upsert: ${timing.dbDurationMs}ms)`
       );
     }
   );
 
-  // General Indexing Event Handler (with 3x retry on VoyageAI and Qdrant save)
-  consumerService.registerHandler<IndexingEventPayload>(
+  consumerService.registerBatchHandler<IndexingEventPayload>(
     KAFKA_TOPICS.INDEXING_QUEUE,
-    async (payload, meta) => {
-      console.log(`[Worker] 📥 Received INDEXING message on partition ${meta.partition}, offset ${meta.offset}:`, {
-        documentId: payload?.documentId,
-        title: payload?.title,
-        source: payload?.source,
-      });
+    async (items, heartbeat) => {
+      const batchStartTime = Date.now();
+      const valid = items.filter((item) => item.payload?.documentId && item.payload?.content);
+      const firstTimestamp = items[0]?.meta?.timestamp ? Number(items[0]?.meta?.timestamp) : null;
+      const kafkaLagMs = firstTimestamp ? Math.max(0, batchStartTime - firstTimestamp) : null;
+      const lagStr = kafkaLagMs !== null ? ` | ⏱️ Queue Lag: ${kafkaLagMs}ms` : "";
 
-      if (!payload?.documentId || !payload?.content) {
-        console.warn("[Worker] Skipping indexing message with missing documentId/content");
-        return;
-      }
+      console.log(`[Worker] 📥 [INDEXING_QUEUE] Batch received: ${valid.length} document(s)${lagStr}`);
+      if (valid.length === 0) return;
 
-      const collection = payload.collection || qdrantCollection();
-      const pointId = pointIdFor(payload.documentId);
-
-      const [vector] = await withRetry(
-        () => embedTexts([payload.content]),
-        {
-          maxRetries: 3,
-          initialDelayMs: 1000,
-          operationName: `Embedding generation for document ${payload.documentId}`,
-        }
+      const timing = await embedAndUpsertBatch(
+        valid.map(({ payload }) => ({
+          documentId: payload.documentId,
+          content: payload.content,
+          collection: payload.collection || qdrantCollection(),
+          payload: {
+            documentId: payload.documentId,
+            userId: payload.userId,
+            githubRepo:
+              payload.githubRepo ||
+              (payload.owner && payload.repo ? `${payload.owner}/${payload.repo}` : undefined),
+            owner: payload.owner,
+            repo: payload.repo,
+            title: payload.title,
+            source: payload.source ?? "kafka",
+            content: payload.content,
+          },
+        })),
+        heartbeat,
+        `Embedding generation for ${valid.length} indexing document(s)`,
       );
 
-      await withRetry(
-        () =>
-          upsertPoints(
-            [
-              {
-                id: pointId,
-                vector,
-                payload: {
-                  documentId: payload.documentId,
-                  userId: payload.userId,
-                  githubRepo:
-                    payload.githubRepo ||
-                    (payload.owner && payload.repo ? `${payload.owner}/${payload.repo}` : undefined),
-                  owner: payload.owner,
-                  repo: payload.repo,
-                  title: payload.title,
-                  source: payload.source ?? "kafka",
-                  content: payload.content,
-                },
-              },
-            ],
-            collection
-          ),
-        {
-          maxRetries: 3,
-          initialDelayMs: 1000,
-          operationName: `Qdrant upsert for document ${payload.documentId}`,
-        }
+      const totalBatchTime = Date.now() - batchStartTime;
+      console.log(
+        `[Worker] 🏁 [INDEXING_QUEUE] Finished consuming & saving ${valid.length} document(s) into database in ${totalBatchTime}ms (Embedding: ${timing.embedDurationMs}ms | DB Upsert: ${timing.dbDurationMs}ms)`
       );
-
-      const info = await collectionInfo(collection).catch(() => ({ result: { points_count: 0 } }));
-      console.log(`[Worker] ✅ Saved to Qdrant collection "${collection}" (${info.result?.points_count ?? "?"} points): ${payload.documentId}`);
     }
   );
 

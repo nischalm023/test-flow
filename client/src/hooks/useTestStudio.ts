@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { ScannedPage, ScannedElement, TestCase, TestCaseStep } from '@/lib/types';
-import { DEFAULT_PRESET_TEST_CASES, buildScannedPage } from '@/data/samplePages';
+import { DEFAULT_PRESET_TEST_CASES, buildScannedPage, resolveSampleIdForUrl } from '@/data/samplePages';
 import { TEST_CASES_KEY, ACTIVE_ID_KEY, loadSavedTestCases } from '@/lib/testCaseStore';
 import type { GithubRepo } from '@/features/auth/components/repos';
 
@@ -39,8 +39,30 @@ export function useTestStudio(idParam?: string | null) {
     })();
 
     const found = wantedId ? pool.find((tc) => tc.id === wantedId) : null;
-    setActiveTestCaseState(found || pool[0]);
+    if (found) {
+      setActiveTestCaseState(found);
+      setHydrated(true);
+      return;
+    }
+
+    setActiveTestCaseState(pool[0]);
     setHydrated(true);
+
+    if (wantedId) {
+      fetch(`/api/qdrant/test-case?id=${encodeURIComponent(wantedId)}`)
+        .then((res) => res.json())
+        .then((data: { ok?: boolean; testCase?: TestCase | null }) => {
+          const fetched = data.testCase;
+          if (data.ok && fetched) {
+            setActiveTestCaseState(fetched);
+            setTestCases((prev) => [fetched, ...prev.filter((tc) => tc.id !== fetched.id)]);
+            showToast('Loaded test case from Qdrant.');
+          }
+        })
+        .catch(() => {
+          // Keep the local fallback silently if Qdrant lookup fails.
+        });
+    }
   }, [idParam]);
 
   useEffect(() => {
@@ -48,9 +70,26 @@ export function useTestStudio(idParam?: string | null) {
     localStorage.setItem(TEST_CASES_KEY, JSON.stringify(testCases));
   }, [testCases, hydrated]);
 
+  // Keep the simulated viewport in sync with whichever test case is active,
+  // instead of always showing the CloudScale sample regardless of the real target URL.
   useEffect(() => {
-    handleSelectSamplePage('saas-login');
-  }, []);
+    const targetUrl = activeTestCase?.targetUrl;
+    const sampleId = resolveSampleIdForUrl(targetUrl);
+    if (sampleId) {
+      setScannedPage(buildScannedPage(sampleId));
+      return;
+    }
+    setScannedPage({
+      url: targetUrl || '',
+      title: activeTestCase?.title || 'Custom Target',
+      description: activeTestCase?.description || '',
+      scannedAt: new Date().toISOString(),
+      elements: [],
+      counts: { total: 0, buttons: 0, inputs: 0, forms: 0, links: 0, headings: 0 },
+      rawHtml: '',
+      sampleKey: 'custom',
+    });
+  }, [activeTestCase]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);

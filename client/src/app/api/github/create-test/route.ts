@@ -11,7 +11,6 @@ import {
   readGithubAccessToken,
   resolveDbUserFromGithubToken,
 } from "@/lib/github-oauth";
-import { generateNativeRepoReadme } from "@/features/github-scan/agent";
 
 export const runtime = "nodejs";
 
@@ -26,6 +25,9 @@ const SETUP_FILES = [
   ".agents/skills/playwright-test-planner/SKILL.md",
   ".agents/skills/playwright-test-generator/SKILL.md",
   ".agents/skills/playwright-test-healer/SKILL.md",
+  ".github/agents/playwright-test-planner.agent.md",
+  ".github/agents/playwright-test-generator.agent.md",
+  ".github/agents/playwright-test-healer.agent.md",
 ];
 
 function parseRepo(input: unknown): { owner: string; repo: string } | null {
@@ -145,40 +147,106 @@ export async function POST(req: Request) {
 
     // 1. Write standard Playwright & MCP setup files
     for (const filePath of SETUP_FILES) {
-      const content = await readFile(path.join(repoRoot, filePath), "utf8");
+      try {
+        const content = await readFile(path.join(repoRoot, filePath), "utf8");
+        await writeRepoFile(octokit, {
+          owner,
+          repo,
+          path: filePath,
+          branch: targetBranch,
+          content,
+          message: "Add Playwright + MCP setup (QA Studio)",
+        });
+        filesWritten.push(filePath);
+      } catch (e) {
+        console.warn(`[create-test] Could not read ${filePath} from template:`, e);
+      }
+    }
+
+    // 2. Ensure package.json with @playwright/test exists on the target branch
+    try {
+      const packageJsonRes = await octokit.rest.repos
+        .getContent({ owner, repo, path: "package.json", ref: targetBranch })
+        .catch(() => null);
+
+      let packageJsonContent: Record<string, any> = {};
+      if (packageJsonRes && "content" in packageJsonRes.data) {
+        const decoded = Buffer.from(packageJsonRes.data.content, "base64").toString("utf8");
+        packageJsonContent = JSON.parse(decoded);
+      }
+
+      packageJsonContent.devDependencies = {
+        ...(packageJsonContent.devDependencies || {}),
+        "@playwright/test": packageJsonContent.devDependencies?.["@playwright/test"] || "^1.50.0",
+        playwright: packageJsonContent.devDependencies?.playwright || "^1.50.0",
+        "@types/node": packageJsonContent.devDependencies?.["@types/node"] || "^20.17.0",
+      };
+      packageJsonContent.scripts = {
+        ...(packageJsonContent.scripts || {}),
+        "mcp:playwright": "playwright run-test-mcp-server",
+        test: packageJsonContent.scripts?.test || "playwright test",
+        "test:ui": packageJsonContent.scripts?.["test:ui"] || "playwright test --ui",
+        "test:headed": packageJsonContent.scripts?.["test:headed"] || "playwright test --headed",
+        "test:e2e": packageJsonContent.scripts?.["test:e2e"] || "playwright test",
+      };
+
       await writeRepoFile(octokit, {
         owner,
         repo,
-        path: filePath,
+        path: "package.json",
         branch: targetBranch,
-        content,
-        message: "Add Playwright + MCP setup (QA Studio)",
+        content: JSON.stringify(packageJsonContent, null, 2) + "\n",
+        message: "Add Playwright dependencies to package.json (QA Studio)",
       });
-      filesWritten.push(filePath);
+      filesWritten.push("package.json");
+    } catch (e) {
+      console.warn("[create-test] Failed to update package.json on target branch:", e);
     }
 
-    // 2. Check whether README.md already exists on the repository
-    const readmeResult = await generateNativeRepoReadme({
-      token,
-      owner,
-      repo,
-      branch: baseBranchName,
-    });
+    // 3. Ensure playwright.config.ts exists on the target branch
+    try {
+      const configExists = await octokit.rest.repos
+        .getContent({ owner, repo, path: "playwright.config.ts", ref: targetBranch })
+        .then(() => true)
+        .catch(() => false);
 
-    // If README.md does NOT exist on the repo, write the newly generated native README.md
-    if (!readmeResult.exists && readmeResult.content) {
-      await writeRepoFile(octokit, {
-        owner,
-        repo,
-        path: "README.md",
-        branch: targetBranch,
-        content: readmeResult.content,
-        message: `Add generated README.md for ${owner}/${repo}`,
-      });
-      filesWritten.push("README.md");
+      if (!configExists) {
+        const defaultConfig = `import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './tests',
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  reporter: 'html',
+  use: {
+    baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    trace: 'on-first-retry',
+  },
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
+});
+`;
+        await writeRepoFile(octokit, {
+          owner,
+          repo,
+          path: "playwright.config.ts",
+          branch: targetBranch,
+          content: defaultConfig,
+          message: "Add playwright.config.ts (QA Studio)",
+        });
+        filesWritten.push("playwright.config.ts");
+      }
+    } catch (e) {
+      console.warn("[create-test] Failed to write playwright.config.ts:", e);
     }
 
-    // 3. Write clean helper READMEs for test suites and agents
+    // 4. Write clean helper READMEs for test suites and agents
     const helperReadmes = [
       {
         path: "tests/README.md",
@@ -197,6 +265,9 @@ Senior QA Engineer Test Automation Suite. All testing code is isolated in the \`
 ## Running Tests Locally
 
 \`\`\`bash
+# Install dependencies
+npm install
+
 # Run all tests
 npx playwright test
 
@@ -246,7 +317,7 @@ Configuration: \`.vscode/mcp.json\` and \`.agents/mcp_config.json\`.
       filesWritten.push(readme.path);
     }
 
-    // 4. Ensure tests/ folder exists
+    // 5. Ensure tests/ folder exists
     const testsFolderExists = await octokit.rest.repos
       .getContent({ owner, repo, path: "tests", ref: targetBranch })
       .then(() => true)
@@ -286,7 +357,6 @@ Configuration: \`.vscode/mcp.json\` and \`.agents/mcp_config.json\`.
       compareUrl: `${repoData.html_url}/tree/${targetBranch}`,
       filesWritten,
       testsFolderCreated,
-      readmeAlreadyExisted: readmeResult.exists,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to create test setup";

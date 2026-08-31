@@ -11,7 +11,9 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "worker:kafka": "tsx --env-file=.env src/workers/kafka-consumer.ts"
+    "worker:kafka": "tsx --env-file=.env src/workers/kafka-consumer.ts",
+    "kafka:worker": "tsx --env-file=.env src/workers/kafka-consumer.ts",
+    "kafka:clear": "tsx --env-file=.env src/scripts/clear-kafka.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -27,6 +29,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
+    "ioredis": "^6.0.0",
     "kafkajs": "^2.2.4",
     "langchain": "^1.5.10",
     "lucide-react": "^0.562.0",
@@ -45,6 +48,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/ioredis": "^5.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

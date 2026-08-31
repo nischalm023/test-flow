@@ -88,13 +88,20 @@ export type KafkaEventType =
   | 'TEST_RUN_TRIGGERED'
   | 'TEST_FAIL_RETRY_TRIGGERED';
 
+export type KafkaMessageMeta = {
+  topic: string;
+  partition: number;
+  offset: string;
+  key?: string | null;
+  timestamp: string;
+};
+
 export type KafkaMessageHandler<T = unknown> = (
   payload: T,
-  rawMessage: {
-    topic: string;
-    partition: number;
-    offset: string;
-    key?: string | null;
-    timestamp: string;
-  }
+  rawMessage: KafkaMessageMeta
+) => Promise<void>;
+
+export type KafkaBatchHandler<T = unknown> = (
+  items: Array<{ payload: T; meta: KafkaMessageMeta }>,
+  heartbeat: () => Promise<void>
 ) => Promise<void>;

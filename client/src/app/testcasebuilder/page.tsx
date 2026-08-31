@@ -9,6 +9,8 @@ import { ProjectRunnerPanel } from '@/components/ProjectRunnerPanel';
 import { useTestStudio } from '@/hooks/useTestStudio';
 import { TestCase } from '@/lib/types';
 
+import { RepoTestCaseSelector } from '@/components/RepoTestCaseSelector';
+
 function TestCaseBuilderPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -17,6 +19,7 @@ function TestCaseBuilderPageInner() {
   const branchParam = searchParams.get('branch')?.trim() || '';
   const scanIdParam = searchParams.get('scanId')?.trim() || '';
   const [exportModalTestCase, setExportModalTestCase] = useState<TestCase | null>(null);
+  const [selectedRepo, setSelectedRepo] = useState<string>(repoParam);
 
   const {
     scannedPage,
@@ -34,7 +37,7 @@ function TestCaseBuilderPageInner() {
       scannedCount={scannedPage?.elements.length || 0}
       testCasesCount={testCases.length}
       hasActiveTestToRun={!!activeTestCase}
-      activeUrl={scannedPage?.url}
+      activeUrl={activeTestCase?.targetUrl || scannedPage?.url}
       toastMessage={toastMessage}
       overlay={
         exportModalTestCase && (
@@ -48,15 +51,44 @@ function TestCaseBuilderPageInner() {
       {repoParam.includes('/') && branchParam && (
         <ProjectRunnerPanel repo={repoParam} branch={branchParam} />
       )}
+
+      {/* Repo & Test Case Selector Bar */}
+      <RepoTestCaseSelector
+        currentRepo={selectedRepo || repoParam}
+        currentTestCaseId={activeTestCase?.id}
+        mode="builder"
+        onSelectRepo={(r) => setSelectedRepo(r)}
+        onSelectTestCase={(tc, r) => {
+          setActiveTestCase(tc);
+          setSelectedRepo(r);
+          const params = new URLSearchParams();
+          params.set('id', tc.id);
+          if (r) params.set('repo', r);
+          if (branchParam) params.set('branch', branchParam);
+          router.replace(`/testcasebuilder?${params.toString()}`);
+        }}
+      />
+
       <TestCaseBuilder
         testCase={activeTestCase}
         scannedElements={scannedPage?.elements || []}
         onSaveTestCase={handleSaveTestCase}
-        onStartTestCaseRun={(tc) => {
+        onStartTestCaseRun={async (tc) => {
           setActiveTestCase(tc);
+
+          // Call GET /api/github/run to fetch run status / initiate run state
+          try {
+            const res = await fetch('/api/github/run');
+            const data = await res.json();
+            console.log('[TestCaseBuilder] 🚀 Called GET /api/github/run:', data);
+          } catch (err) {
+            console.warn('[TestCaseBuilder] ⚠️ GET /api/github/run failed:', err);
+          }
+
           const params = new URLSearchParams();
           params.set('id', tc.id);
-          if (repoParam) params.set('repo', repoParam);
+          const r = selectedRepo || repoParam;
+          if (r) params.set('repo', r);
           if (branchParam) params.set('branch', branchParam);
           if (scanIdParam) params.set('scanId', scanIdParam);
           router.push(`/testcaserunner?${params.toString()}`);

@@ -195,6 +195,25 @@ export async function loadDocumentCollection(githubRepo?: string): Promise<Scrol
   }
 }
 
+/** Look up a single point by its original documentId within a collection. */
+export async function findPointByDocumentId(
+  documentId: string,
+  collection: string,
+): Promise<ScrolledPoint | null> {
+  try {
+    const data = await scrollPoints(1, collection, {
+      must: [{ key: "documentId", match: { value: documentId } }],
+    });
+    return data.result?.points?.[0] ?? null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("doesn't exist") || message.includes("404")) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 export type QdrantSearchResult = {
   id: string | number;
   version: number;

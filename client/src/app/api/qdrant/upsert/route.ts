@@ -35,6 +35,13 @@ export async function POST(req: Request) {
       owner: body.owner,
       repo: body.repo,
     });
+
+    const repoKey = body.githubRepo || (body.owner && body.repo ? `${body.owner}/${body.repo}` : null);
+    if (repoKey) {
+      const { cacheRepoTestCasesHSet } = await import("@/lib/redis");
+      void cacheRepoTestCasesHSet(repoKey, testCases, 3600);
+    }
+
     return NextResponse.json({ qdrant });
   } catch (err) {
     return NextResponse.json(

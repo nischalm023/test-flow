@@ -2,7 +2,11 @@
   "name": "playwright",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "worker:kafka": "npm --prefix client run worker:kafka",
+    "kafka:worker": "npm --prefix client run kafka:worker",
+    "kafka:clear": "npm --prefix client run kafka:clear"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",

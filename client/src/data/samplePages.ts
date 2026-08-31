@@ -80,7 +80,48 @@ export const SAMPLE_PAGES: SampleInteractivePage[] = [
       el('elem-sup-6', 'button', '#btn-submit-ticket', 'Submit Ticket', 'action', { text: 'Submit Incident' }),
     ],
   },
+  {
+    id: 'eventflow-client-auth',
+    name: 'EventFlow Client (Port 4000)',
+    category: 'EventFlow Next.js',
+    description: 'Local running EventFlow application auth & registration interface.',
+    badge: 'Local App',
+    defaultUrl: 'http://localhost:4000/login',
+    htmlSnippet: '<form id="auth-form"><input id="email" type="email"/><input id="password" type="password"/><button type="submit">Sign in</button></form>',
+    elements: [
+      el('ef-elem-1', 'h1', 'h1', 'Sign In Heading', 'content', { text: 'Sign in to EventFlow' }),
+      el('ef-elem-2', 'input', 'input[type="email"]', 'Email Address', 'input', { type: 'email', placeholder: 'user@example.com', name: 'email', required: true }),
+      el('ef-elem-3', 'input', 'input[type="password"]', 'Password', 'input', { type: 'password', placeholder: '••••••••', name: 'password', required: true }),
+      el('ef-elem-4', 'button', 'button[type="submit"]', 'Sign In Button', 'action', { text: 'Sign in' }),
+      el('ef-elem-5', 'a', 'a[href="/register"]', 'Register Link', 'action', { text: 'Create an account' }),
+      el('ef-elem-6', 'a', 'a[href="/"]', 'EventFlow Logo', 'action', { text: 'EventFlow' }),
+    ],
+  },
+  {
+    id: 'eventflow-client-register',
+    name: 'EventFlow Registration',
+    category: 'EventFlow Next.js',
+    description: 'User registration with name, email, password and confirmation.',
+    badge: 'Local App',
+    defaultUrl: 'http://localhost:4000/register',
+    htmlSnippet: '<form id="reg-form"><input id="name"/><input id="email"/><input id="password"/><button type="submit">Register</button></form>',
+    elements: [
+      el('ef-reg-1', 'h1', 'h1', 'Register Heading', 'content', { text: 'Create an account' }),
+      el('ef-reg-2', 'input', 'input[name="name"]', 'Full Name', 'input', { type: 'text', placeholder: 'John Doe', name: 'name', required: true }),
+      el('ef-reg-3', 'input', 'input[type="email"]', 'Email Address', 'input', { type: 'email', placeholder: 'user@example.com', name: 'email', required: true }),
+      el('ef-reg-4', 'input', 'input[name="password"]', 'Password', 'input', { type: 'password', placeholder: '••••••••', name: 'password', required: true }),
+      el('ef-reg-5', 'input', 'input[name="confirmPassword"]', 'Confirm Password', 'input', { type: 'password', placeholder: '••••••••', name: 'confirmPassword', required: true }),
+      el('ef-reg-6', 'button', 'button[type="submit"]', 'Create Account', 'action', { text: 'Create account' }),
+      el('ef-reg-7', 'a', 'a[href="/login"]', 'Sign In Link', 'action', { text: 'Already have an account? Sign in' }),
+    ],
+  },
 ];
+
+export function resolveSampleIdForUrl(url?: string): string | null {
+  if (!url) return null;
+  const match = SAMPLE_PAGES.find((s) => s.defaultUrl === url);
+  return match ? match.id : null;
+}
 
 export function buildScannedPage(sampleId: string): ScannedPage {
   const sample = SAMPLE_PAGES.find((s) => s.id === sampleId) || SAMPLE_PAGES[0];
@@ -105,35 +146,59 @@ export function buildScannedPage(sampleId: string): ScannedPage {
 
 export const DEFAULT_PRESET_TEST_CASES: TestCase[] = [
   {
-    id: 'tc-preset-login-happy',
-    title: 'E2E Flow: CloudScale Sign In',
-    description: 'Fill credentials and authenticate into the dashboard.',
-    priority: 'high',
+    id: 'tc-eventflow-login-happy',
+    title: 'E2E Flow: EventFlow User Login & Session Persistence',
+    description: 'Authenticates with valid credentials and verifies dashboard navigation and localStorage session token.',
+    priority: 'critical',
     category: 'E2E',
     status: 'ready',
-    targetUrl: 'https://app.cloudscale.io/login',
+    targetUrl: 'http://localhost:4000/login',
     createdAt: new Date().toISOString(),
     steps: [
-      { id: 'step-p1-1', order: 1, action: 'navigate', targetSelector: 'window', targetDescription: 'Open CloudScale Sign In', value: 'https://app.cloudscale.io/login', timeoutMs: 1200 },
-      { id: 'step-p1-2', order: 2, action: 'type', targetSelector: '#input-work-email', targetDescription: 'Fill corporate email', value: 'tester@example.com', timeoutMs: 800 },
-      { id: 'step-p1-3', order: 3, action: 'type', targetSelector: '#input-user-password', targetDescription: 'Fill password', value: 'TestPass123!', timeoutMs: 800 },
-      { id: 'step-p1-4', order: 4, action: 'click', targetSelector: '#btn-submit-login', targetDescription: 'Authenticate', timeoutMs: 1200 },
-      { id: 'step-p1-5', order: 5, action: 'assert_visible', targetSelector: '#auth-success-banner', targetDescription: 'Assert authenticated state', expectedValue: 'visible', timeoutMs: 1500 },
+      { id: 'ef-s1', order: 1, action: 'navigate', targetSelector: 'window', targetDescription: 'Open EventFlow Login Page', value: 'http://localhost:4000/login', timeoutMs: 2000 },
+      { id: 'ef-s2', order: 2, action: 'type', targetSelector: 'input[type="email"]', targetDescription: 'Fill user email address', value: 'tester@example.com', timeoutMs: 1000 },
+      { id: 'ef-s3', order: 3, action: 'type', targetSelector: 'input[type="password"]', targetDescription: 'Fill account password', value: 'Password123!', timeoutMs: 1000 },
+      { id: 'ef-s4', order: 4, action: 'click', targetSelector: 'button[type="submit"]', targetDescription: 'Click Sign In', timeoutMs: 1500 },
+      { id: 'ef-s5', order: 5, action: 'assert_visible', targetSelector: 'header, nav', targetDescription: 'Verify navigation header is visible', expectedValue: 'visible', timeoutMs: 2000 },
     ],
   },
   {
-    id: 'tc-preset-login-required',
-    title: 'Negative: Sign in required fields',
-    description: 'Submit login with empty required fields.',
+    id: 'tc-eventflow-register-happy',
+    title: 'E2E Flow: EventFlow User Registration',
+    description: 'Registers a new user and confirms redirection or login prompt.',
     priority: 'high',
-    category: 'Negative / Edge Case',
+    category: 'E2E',
     status: 'ready',
-    targetUrl: 'https://app.cloudscale.io/login',
+    targetUrl: 'http://localhost:4000/register',
     createdAt: new Date().toISOString(),
     steps: [
-      { id: 'step-p2-1', order: 1, action: 'navigate', targetSelector: 'window', targetDescription: 'Open sign in', value: 'https://app.cloudscale.io/login', timeoutMs: 1200 },
-      { id: 'step-p2-2', order: 2, action: 'click', targetSelector: '#btn-submit-login', targetDescription: 'Submit empty form', timeoutMs: 1000 },
-      { id: 'step-p2-3', order: 3, action: 'assert_visible', targetSelector: '#input-work-email', targetDescription: 'Assert email field still present', expectedValue: 'required', timeoutMs: 1200 },
+      { id: 'efr-s1', order: 1, action: 'navigate', targetSelector: 'window', targetDescription: 'Open EventFlow Register Page', value: 'http://localhost:4000/register', timeoutMs: 2000 },
+      { id: 'efr-s2', order: 2, action: 'type', targetSelector: 'input[name="name"]', targetDescription: 'Fill full name', value: 'Alex QA', timeoutMs: 1000 },
+      { id: 'efr-s3', order: 3, action: 'type', targetSelector: 'input[type="email"]', targetDescription: 'Fill corporate email', value: 'alex.qa@example.com', timeoutMs: 1000 },
+      { id: 'efr-s4', order: 4, action: 'type', targetSelector: 'input[name="password"]', targetDescription: 'Fill password', value: 'SecurePass123!', timeoutMs: 1000 },
+      { id: 'efr-s5', order: 5, action: 'type', targetSelector: 'input[name="confirmPassword"]', targetDescription: 'Confirm password', value: 'SecurePass123!', timeoutMs: 1000 },
+      { id: 'efr-s6', order: 6, action: 'click', targetSelector: 'button[type="submit"]', targetDescription: 'Click Create Account', timeoutMs: 1500 },
     ],
   },
+
+
+
 ];
+
+/**
+ * Fetch dynamic test cases stored in Qdrant & Redis for a given repo
+ */
+export async function fetchQdrantTestCases(repo?: string): Promise<TestCase[]> {
+  try {
+    const url = repo ? `/api/qdrant/test-cases?repo=${encodeURIComponent(repo)}` : `/api/qdrant/test-cases`;
+    const res = await fetch(url);
+    if (!res.ok) return DEFAULT_PRESET_TEST_CASES;
+    const data = await res.json();
+    if (Array.isArray(data.testCases) && data.testCases.length > 0) {
+      return data.testCases;
+    }
+    return DEFAULT_PRESET_TEST_CASES;
+  } catch {
+    return DEFAULT_PRESET_TEST_CASES;
+  }
+}

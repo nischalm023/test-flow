@@ -1,9 +1,9 @@
+import { Octokit } from "octokit";
 import { RecursiveCharacterTextSplitter } from "@/lib/chunker";
 import { sendKafkaBatch } from "@/lib/kafka/producer";
 import { KAFKA_TOPICS } from "@/lib/kafka/topics";
 import { ReadmeChunkIndexingPayload } from "@/types/kafka";
 import { pointIdFor } from "@/lib/qdrant";
-import { generateNativeRepoReadme } from "./agent";
 
 export interface GenerateAndIndexReadmeOptions {
   token?: string;
@@ -26,9 +26,8 @@ export interface ReadmeIndexingResult {
 
 /**
  * Checks if README.md exists on the selected GitHub repository.
- * - If README.md exists: indexes the actual repository README without modifying or generating.
- * - If README.md does not exist: generates a comprehensive native README.md based entirely on
- *   the codebase and indexes it to Kafka -> Qdrant.
+ * - If README.md exists: indexes the actual repository README.
+ * - If README.md does not exist: skips indexing without generating synthetic files.
  */
 export async function generateAndIndexRepoReadme({
   token,
@@ -42,30 +41,42 @@ export async function generateAndIndexRepoReadme({
   let readmeContent = "";
   let readmeAlreadyExisted = false;
 
-  // 1. Check if README.md already exists on the selected repository
+  // 1. Fetch README.md if it exists on GitHub repository
   if (token) {
     try {
-      const checkResult = await generateNativeRepoReadme({
-        token,
+      const octokit = new Octokit({ auth: token, userAgent: "TestFlow-AI" });
+      const { data } = await octokit.rest.repos.getReadme({
         owner,
         repo,
-        branch,
+        ref: branch && branch !== "HEAD" ? branch : undefined,
       });
-      readmeContent = checkResult.content;
-      readmeAlreadyExisted = checkResult.exists;
-    } catch (err) {
-      console.warn(`[README Indexer] Warning getting README for ${githubRepo}:`, err);
+
+      if (data && typeof data.content === "string") {
+        const decoded = Buffer.from(data.content, "base64").toString("utf-8");
+        if (decoded.trim().length > 0) {
+          readmeContent = decoded;
+          readmeAlreadyExisted = true;
+        }
+      }
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status;
+      if (status !== 404) {
+        console.warn(`[README Indexer] Notice checking README for ${githubRepo}:`, err);
+      }
     }
   }
 
-  // 2. Fallback to existingReport only if we have no content
-  if (!readmeContent.trim() && existingReport?.trim()) {
-    readmeContent = existingReport.trim();
-  }
-
-  // 3. Fallback to basic clean header if completely empty
+  // If no README exists on the repository, do not index fake documents
   if (!readmeContent.trim()) {
-    readmeContent = `# ${githubRepo}\n\nRepository: https://github.com/${githubRepo}\n`;
+    console.log(`[README Indexer] No existing README.md found for ${githubRepo}. Skipping index.`);
+    return {
+      success: true,
+      totalChunks: 0,
+      topic: KAFKA_TOPICS.README_CHUNKS,
+      documentIds: [],
+      readmeLength: 0,
+      readmeAlreadyExisted: false,
+    };
   }
 
   // 4. Chunk README using LangChain RecursiveCharacterTextSplitter (chunkSize: 800, chunkOverlap: 150)
@@ -79,30 +90,52 @@ export async function generateAndIndexRepoReadme({
     textChunks.push(readmeContent);
   }
 
-  const baseDocId = `${owner}_${repo}_readme`;
-  const payloads: ReadmeChunkIndexingPayload[] = textChunks.map((chunk, index) => {
-    const docId = `${baseDocId}_chunk_${index}`;
-    return {
-      documentId: docId,
-      chunkIndex: index,
-      totalChunks: textChunks.length,
-      title: `${githubRepo} - README (Chunk ${index + 1}/${textChunks.length})`,
-      content: chunk,
-      source: "readme-chunk",
-      chunkSize: 800,
-      chunkOverlap: 150,
-      userId,
-      githubRepo,
-      owner,
-      repo,
-      branch: branch || "main",
-      metadata: {
-        pointId: pointIdFor(docId),
-        length: chunk.length,
-        createdAt: new Date().toISOString(),
-      },
-    };
-  });
+  const toPayloads = (
+    chunks: string[],
+    baseDocId: string,
+    source: string,
+    titlePrefix: string,
+  ): ReadmeChunkIndexingPayload[] =>
+    chunks.map((chunk, index) => {
+      const docId = `${baseDocId}_chunk_${index}`;
+      return {
+        documentId: docId,
+        chunkIndex: index,
+        totalChunks: chunks.length,
+        title: `${titlePrefix} (Chunk ${index + 1}/${chunks.length})`,
+        content: chunk,
+        source,
+        chunkSize: 800,
+        chunkOverlap: 150,
+        userId,
+        githubRepo,
+        owner,
+        repo,
+        branch: branch || "main",
+        metadata: {
+          pointId: pointIdFor(docId),
+          length: chunk.length,
+          createdAt: new Date().toISOString(),
+        },
+      };
+    });
+
+  const payloads: ReadmeChunkIndexingPayload[] = toPayloads(
+    textChunks,
+    `${owner}_${repo}_readme`,
+    "readme-chunk",
+    `${githubRepo} - README`,
+  );
+
+  const report = existingReport?.trim() || "";
+  if (report && report !== readmeContent.trim()) {
+    const reportChunks = await splitter.splitText(report);
+    if (reportChunks.length > 0) {
+      payloads.push(
+        ...toPayloads(reportChunks, `${owner}_${repo}_scan`, "scan-report", `${githubRepo} - Scan`)
+      );
+    }
+  }
 
   // 5. Publish chunks to Kafka topic (README_CHUNKS)
   try {
@@ -111,9 +144,11 @@ export async function generateAndIndexRepoReadme({
       value: p,
     }));
 
+    const dispatchStart = Date.now();
     await sendKafkaBatch(KAFKA_TOPICS.README_CHUNKS, kafkaMessages);
+    const dispatchDurationMs = Date.now() - dispatchStart;
     console.log(
-      `[Kafka] 🚀 Dispatched ${payloads.length} README chunks for ${githubRepo} to topic "${KAFKA_TOPICS.README_CHUNKS}" (alreadyExisted: ${readmeAlreadyExisted})`
+      `[Kafka] 🚀 Dispatched ${payloads.length} README chunks for ${githubRepo} to topic "${KAFKA_TOPICS.README_CHUNKS}" in ${dispatchDurationMs}ms (alreadyExisted: ${readmeAlreadyExisted})`
     );
 
     return {
