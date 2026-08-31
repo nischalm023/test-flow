@@ -78,4 +78,3 @@ Enable them in Cursor/VS Code under **Settings → MCP**.
 ## Docs
 
 - [AGENTS.md](./AGENTS.md) — full agent rules and conventions
-- [specs/README.md](./specs/README.md) — test plan index
