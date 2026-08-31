@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
     "@langchain/anthropic",
     "@langchain/openrouter",
     "@langchain/langgraph",
+    "postgres",
   ],
 };
 

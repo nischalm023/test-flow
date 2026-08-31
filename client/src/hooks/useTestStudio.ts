@@ -3,26 +3,8 @@
 import { useEffect, useState } from 'react';
 import { ScannedPage, ScannedElement, TestCase, TestCaseStep } from '@/lib/types';
 import { DEFAULT_PRESET_TEST_CASES, buildScannedPage } from '@/data/samplePages';
+import { TEST_CASES_KEY, ACTIVE_ID_KEY, loadSavedTestCases } from '@/lib/testCaseStore';
 import type { GithubRepo } from '@/features/auth/components/repos';
-
-const TEST_CASES_KEY = 'qa_studio_test_cases';
-const ACTIVE_ID_KEY = 'qa_studio_active_test_case_id';
-
-function loadSavedTestCases(): TestCase[] | null {
-  try {
-    const saved = localStorage.getItem(TEST_CASES_KEY);
-    if (!saved) return null;
-    const parsed = JSON.parse(saved);
-    if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    const kept = parsed.filter(
-      (tc: TestCase) => !String(tc?.targetUrl || '').includes('apexgear.io'),
-    );
-    return kept.length > 0 ? kept : null;
-  } catch (e) {
-    console.error('Failed to parse local test cases:', e);
-    return null;
-  }
-}
 
 export function useTestStudio(idParam?: string | null) {
   const [scannedPage, setScannedPage] = useState<ScannedPage | null>(null);
@@ -281,7 +263,25 @@ export function useTestStudio(idParam?: string | null) {
       return [updated, ...prev];
     });
     setActiveTestCase(updated);
-    showToast('Test Case saved to suite!');
+    const githubUrl = scannedPage?.url || '';
+    const githubMatch = githubUrl.match(/github\.com\/([^/]+\/[^/]+)/);
+    const githubRepo = githubMatch?.[1]?.replace(/\.git$/, '');
+    void fetch('/api/qdrant/upsert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCases: [updated], githubRepo }),
+    })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as {
+          qdrant?: { saved?: boolean; pointsCount?: number };
+        };
+        if (res.ok && data.qdrant?.saved) {
+          showToast(`Test case saved to Qdrant (${data.qdrant.pointsCount ?? 0} points)`);
+        } else {
+          showToast('Test case saved locally; Qdrant write failed.');
+        }
+      })
+      .catch(() => showToast('Test case saved locally; Qdrant write failed.'));
   };
 
   const handleDeleteTestCase = (id: string) => {

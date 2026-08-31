@@ -8,7 +8,11 @@ import { useTestStudio } from '@/hooks/useTestStudio';
 
 function TestCaseRunnerPageInner() {
   const router = useRouter();
-  const idParam = useSearchParams().get('id');
+  const searchParams = useSearchParams();
+  const idParam = searchParams.get('id');
+  const repoParam = searchParams.get('repo')?.trim() || '';
+  const branchParam = searchParams.get('branch')?.trim() || '';
+  const scanIdParam = searchParams.get('scanId')?.trim() || '';
 
   const {
     scannedPage,
@@ -32,7 +36,16 @@ function TestCaseRunnerPageInner() {
         testCase={activeTestCase}
         scannedElements={scannedPage?.elements || []}
         sampleKey={scannedPage?.sampleKey || 'saas-login'}
-        onBackToBuilder={() => router.push(`/testcasebuilder?id=${activeTestCase.id}`)}
+        repo={repoParam}
+        branch={branchParam}
+        scanId={scanIdParam}
+        onBackToBuilder={() => {
+          const params = new URLSearchParams();
+          if (activeTestCase?.id) params.set('id', activeTestCase.id);
+          if (repoParam) params.set('repo', repoParam);
+          if (branchParam) params.set('branch', branchParam);
+          router.push(`/testcasebuilder?${params.toString()}`);
+        }}
         onTestComplete={handleTestComplete}
       />
     </AppShell>

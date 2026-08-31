@@ -2,8 +2,15 @@ import { cookies } from "next/headers";
 import {
   GITHUB_ACCESS_COOKIE,
   readGithubAccessToken,
+  resolveDbUserFromGithubToken,
 } from "@/lib/github-oauth";
-import { createRepoScanAgent } from "@/features/github-scan/agent";
+import {
+  appendRepoScanTurn,
+  buildRepoScanInput,
+  createRepoScanAgent,
+  repoScanSessionId,
+} from "@/features/github-scan/agent";
+import { generateAndIndexRepoReadme } from "@/features/github-scan/readme-indexer";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -90,6 +97,7 @@ export async function POST(req: Request) {
       try {
         const branchContext = branchName ? ` (branch: ${branchName})` : "";
         if (mode === "report") write(`Scanning ${parsed.owner}/${parsed.repo}${branchContext}…\n\n`);
+        const sessionId = repoScanSessionId(parsed.owner, parsed.repo, mode);
         const agent = createRepoScanAgent(token, parsed.owner, parsed.repo, mode);
         const userContent =
           mode === "suggest-prompts"
@@ -102,17 +110,29 @@ ${userPrompt || "(no extra prompt — cover the main layout and flows)"}
 """
 Use their prompt to decide which flows matter.`
               : `Scan GitHub repo ${parsed.owner}/${parsed.repo}${branchContext} and describe it in detail.`;
-        const events = await agent.stream(
-          {
-            messages: [{ role: "user", content: userContent }],
-          },
-          { streamMode: "messages" },
-        );
+        const input = await buildRepoScanInput(sessionId, userContent);
+        let assistantContent = "";
+        const events = await agent.stream(input, { streamMode: "messages" });
         for await (const chunk of events) {
           if (req.signal.aborted) break;
           const text = chunkText(chunk);
-          if (text) write(text);
+          if (text) {
+            assistantContent += text;
+            write(text);
+          }
         }
+        await appendRepoScanTurn(sessionId, userContent, assistantContent);
+
+        // Asynchronously generate/chunk README & scan report and publish to Kafka topic
+        const dbUser = token ? await resolveDbUserFromGithubToken(token).catch(() => null) : null;
+        void generateAndIndexRepoReadme({
+          token,
+          owner: parsed.owner,
+          repo: parsed.repo,
+          branch: branchName || undefined,
+          userId: dbUser?.id,
+          existingReport: assistantContent || undefined,
+        }).catch((e) => console.error("[Scan Route] Failed to index README chunks to Kafka:", e));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Scan failed";
         write(`\n\nScan error: ${message}`);

@@ -1,5 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
-import { Octokit } from 'octokit';
+import { Octokit } from '@octokit/rest';
+import { eq, or } from 'drizzle-orm';
+import { db } from '@/db';
+import { users } from '@/db/schema';
 import type { User } from '@/types';
 
 export {
@@ -150,6 +153,79 @@ export async function fetchGithubUser(accessToken: string): Promise<User> {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/**
+ * Upsert authenticated GitHub user into PostgreSQL database via Drizzle ORM
+ */
+export async function upsertGithubUser(ghUser: {
+  email: string;
+  name: string;
+  githubLogin: string;
+}): Promise<User> {
+  const existingUser = await db.query.users.findFirst({
+    where: or(
+      eq(users.email, ghUser.email),
+      eq(users.githubLogin, ghUser.githubLogin)
+    ),
+  });
+
+  if (existingUser) {
+    const [updated] = await db
+      .update(users)
+      .set({
+        name: ghUser.name || existingUser.name,
+        githubLogin: ghUser.githubLogin || existingUser.githubLogin,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, existingUser.id))
+      .returning();
+
+    return toUser(updated);
+  }
+
+  const [inserted] = await db
+    .insert(users)
+    .values({
+      email: ghUser.email,
+      name: ghUser.name,
+      githubLogin: ghUser.githubLogin,
+      role: 'USER',
+    })
+    .returning();
+
+  return toUser(inserted);
+}
+
+function toUser(row: typeof users.$inferSelect): User {
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    githubLogin: row.githubLogin ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/** Resolve the Postgres user for the GitHub token currently authenticating the request. */
+export async function resolveDbUserFromGithubToken(accessToken: string): Promise<User | null> {
+  try {
+    const ghUser = await fetchGithubUser(accessToken);
+    const githubLogin = ghUser.githubLogin || '';
+    const existingUser = await db.query.users.findFirst({
+      where: or(eq(users.email, ghUser.email), eq(users.githubLogin, githubLogin)),
+    });
+    if (existingUser) return toUser(existingUser);
+    return upsertGithubUser({
+      email: ghUser.email,
+      name: ghUser.name,
+      githubLogin,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function signGithubAccessToken(token: string) {

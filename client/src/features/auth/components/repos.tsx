@@ -242,8 +242,8 @@ export function GithubRepoList({ scanningRepoId }: GithubRepoListProps) {
 
   // 4. Trigger Create Test Mutation
   const handleCreateTest = (repo: GithubRepo, branch: string) => {
-    // createTestMutation.mutate({ repo, branch });
-    router.push(`prompt?repo=${encodeURIComponent(repo.full_name || '')}&branch=${encodeURIComponent(branch)}`)
+    const fullName = repo.full_name || repo.name;
+    router.push(`/prompt?repo=${encodeURIComponent(fullName)}&branch=${encodeURIComponent(branch)}`);
   };
 
   if (!user?.githubLogin) {

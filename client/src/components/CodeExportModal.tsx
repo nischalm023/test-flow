@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { TestCase } from '../types';
 import { Code2, Copy, Check, Download, ExternalLink } from 'lucide-react';
+import { stepsToPlaywrightBody, resolveNavigateUrl } from '@/lib/playwrightCodegen';
 
 interface CodeExportModalProps {
   testCase: TestCase;
@@ -19,30 +20,7 @@ test.describe('${tc.category}: ${tc.title}', () => {
     // 1. Set default navigation timeout
     page.setDefaultTimeout(10000);
 
-${tc.steps.map((step, i) => {
-  switch (step.action) {
-    case 'navigate':
-      return `    // Step ${i + 1}: Navigate to target page\n    await page.goto('${step.value || tc.targetUrl}');`;
-    case 'click':
-      return `    // Step ${i + 1}: Click ${step.targetDescription || step.targetSelector}\n    await page.locator('${step.targetSelector}').click();`;
-    case 'type':
-      return `    // Step ${i + 1}: Enter text in ${step.targetDescription || step.targetSelector}\n    await page.locator('${step.targetSelector}').fill('${step.value || ''}');`;
-    case 'select':
-      return `    // Step ${i + 1}: Select option\n    await page.locator('${step.targetSelector}').selectOption('${step.value || ''}');`;
-    case 'assert_visible':
-      return `    // Step ${i + 1}: Assert visible: ${step.targetDescription || step.targetSelector}\n    await expect(page.locator('${step.targetSelector}')).toBeVisible({ timeout: ${step.timeoutMs} });`;
-    case 'assert_text':
-      return `    // Step ${i + 1}: Assert text content\n    await expect(page.locator('${step.targetSelector}')).toContainText('${step.expectedValue || ''}');`;
-    case 'assert_value':
-      return `    // Step ${i + 1}: Assert input value\n    await expect(page.locator('${step.targetSelector}')).toHaveValue('${step.expectedValue || ''}');`;
-    case 'wait':
-      return `    // Step ${i + 1}: Wait delay\n    await page.waitForTimeout(${step.timeoutMs});`;
-    case 'screenshot':
-      return `    // Step ${i + 1}: Capture screenshot\n    await page.screenshot({ path: 'screenshots/step-${i + 1}.png' });`;
-    default:
-      return `    // Step ${i + 1}: Action ${step.action}\n    await page.locator('${step.targetSelector}').hover();`;
-  }
-}).join('\n\n')}
+${stepsToPlaywrightBody(tc.steps, tc.targetUrl)}
   });
 });
 `;
@@ -54,7 +32,7 @@ ${tc.steps.map((step, i) => {
 ${tc.steps.map((step, i) => {
   switch (step.action) {
     case 'navigate':
-      return `    // Step ${i + 1}: Visit page\n    cy.visit('${step.value || tc.targetUrl}');`;
+      return `    // Step ${i + 1}: Visit page\n    cy.visit('${resolveNavigateUrl(step.value, tc.targetUrl)}');`;
     case 'click':
       return `    // Step ${i + 1}: Click element\n    cy.get('${step.targetSelector}').click();`;
     case 'type':
@@ -89,7 +67,7 @@ ${tc.steps.map((step, i) => {
 ${tc.steps.map((step, i) => {
   switch (step.action) {
     case 'navigate':
-      return `  // Step ${i + 1}: Goto URL\n  await page.goto('${step.value || tc.targetUrl}', { waitUntil: 'networkidle2' });`;
+      return `  // Step ${i + 1}: Goto URL\n  await page.goto('${resolveNavigateUrl(step.value, tc.targetUrl)}', { waitUntil: 'networkidle2' });`;
     case 'click':
       return `  // Step ${i + 1}: Click\n  await page.waitForSelector('${step.targetSelector}');\n  await page.click('${step.targetSelector}');`;
     case 'type':
@@ -122,7 +100,7 @@ try:
 ${tc.steps.map((step, i) => {
   switch (step.action) {
     case 'navigate':
-      return `    # Step ${i + 1}: Open target URL\n    driver.get("${step.value || tc.targetUrl}")`;
+      return `    # Step ${i + 1}: Open target URL\n    driver.get("${resolveNavigateUrl(step.value, tc.targetUrl)}")`;
     case 'click':
       return `    # Step ${i + 1}: Click element\n    elem = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "${step.targetSelector}")))\n    elem.click()`;
     case 'type':

@@ -5,12 +5,17 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { AppShell } from '@/components/AppShell';
 import { TestCaseBuilder } from '@/components/TestCaseBuilder';
 import { CodeExportModal } from '@/components/CodeExportModal';
+import { ProjectRunnerPanel } from '@/components/ProjectRunnerPanel';
 import { useTestStudio } from '@/hooks/useTestStudio';
 import { TestCase } from '@/lib/types';
 
 function TestCaseBuilderPageInner() {
   const router = useRouter();
-  const idParam = useSearchParams().get('id');
+  const searchParams = useSearchParams();
+  const idParam = searchParams.get('id');
+  const repoParam = searchParams.get('repo')?.trim() || '';
+  const branchParam = searchParams.get('branch')?.trim() || '';
+  const scanIdParam = searchParams.get('scanId')?.trim() || '';
   const [exportModalTestCase, setExportModalTestCase] = useState<TestCase | null>(null);
 
   const {
@@ -40,13 +45,21 @@ function TestCaseBuilderPageInner() {
         )
       }
     >
+      {repoParam.includes('/') && branchParam && (
+        <ProjectRunnerPanel repo={repoParam} branch={branchParam} />
+      )}
       <TestCaseBuilder
         testCase={activeTestCase}
         scannedElements={scannedPage?.elements || []}
         onSaveTestCase={handleSaveTestCase}
         onStartTestCaseRun={(tc) => {
           setActiveTestCase(tc);
-          router.push(`/testcaserunner?id=${tc.id}`);
+          const params = new URLSearchParams();
+          params.set('id', tc.id);
+          if (repoParam) params.set('repo', repoParam);
+          if (branchParam) params.set('branch', branchParam);
+          if (scanIdParam) params.set('scanId', scanIdParam);
+          router.push(`/testcaserunner?${params.toString()}`);
         }}
         onOpenCodeExport={(tc) => setExportModalTestCase(tc)}
         onCancel={() => router.push('/scanner')}

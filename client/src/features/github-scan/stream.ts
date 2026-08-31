@@ -16,12 +16,14 @@ export async function streamGithubScan(
     body: JSON.stringify(body),
     signal,
   });
+
   if (!res.ok || !res.body) {
     const errText = await res.text().catch(() => res.statusText);
     throw new Error(errText || `HTTP ${res.status}`);
   }
 
   const reader = res.body.getReader();
+  console.log(reader, "red")
   const decoder = new TextDecoder();
   let next = '';
   while (true) {

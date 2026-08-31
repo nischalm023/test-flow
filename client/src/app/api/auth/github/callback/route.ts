@@ -10,6 +10,7 @@ import {
   fetchGithubUser,
   signGithubAccessToken,
   signSessionToken,
+  upsertGithubUser,
 } from '@/lib/github-oauth';
 
 export async function GET(request: Request) {
@@ -28,8 +29,13 @@ export async function GET(request: Request) {
 
   try {
     const githubToken = await exchangeGithubCode(code, origin);
-    const user = await fetchGithubUser(githubToken);
-    const sessionToken = signSessionToken(user);
+    const rawGithubUser = await fetchGithubUser(githubToken);
+    const dbUser = await upsertGithubUser({
+      email: rawGithubUser.email,
+      name: rawGithubUser.name,
+      githubLogin: rawGithubUser.githubLogin || '',
+    });
+    const sessionToken = signSessionToken(dbUser);
 
     const response = NextResponse.redirect(`${origin}/login/github`);
     response.cookies.set(GITHUB_STATE_COOKIE, '', { ...cookieOptions(0), maxAge: 0 });

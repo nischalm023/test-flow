@@ -185,6 +185,7 @@ export function PromptsCard({ repo = '', selectedPresetId, onSelectPreset }: Pro
       );
 
       const finalParsed = parsePromptsJson(text);
+      
       if (finalParsed && finalParsed.length > 0) {
         setPrompts(finalParsed);
         scannedRepoRef.current = targetRepo;
